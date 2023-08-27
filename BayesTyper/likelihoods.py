@@ -218,6 +218,8 @@ class LikelihoodVectorized(object):
         use_jac=True,
         ):
 
+        import numpy as np
+
         if not self._three_point:
             grad_diff *= 2.
 
@@ -260,7 +262,8 @@ class LikelihoodVectorized(object):
             worker_id = worker_id[0]
             _logP_likelihood = ray.get(worker_id)
             parm_idx, sign = worker_id_dict[worker_id]
-            grad[parm_idx] += _logP_likelihood * sign
+            if not np.isnan(_logP_likelihood):
+                grad[parm_idx] += _logP_likelihood * sign
 
         if use_jac:
             #grad *= 1./self.jacobian
