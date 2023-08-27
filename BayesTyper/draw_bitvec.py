@@ -234,7 +234,7 @@ def draw_bitvector_from_bits(
     """
 
     import numpy as np
-    import arrays
+    from . import arrays
     import copy
     import itertools
     from .bitvector_typing import bitvec_hierarchy_to_allocations

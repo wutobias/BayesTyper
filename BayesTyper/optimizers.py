@@ -1478,7 +1478,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         max_splits=100,
         ):
 
-        import arrays
+        from . import arrays
         import numpy as np
         import copy
         import ray
