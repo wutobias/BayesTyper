@@ -65,13 +65,18 @@ def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
                     target_dict[sys_name][target_idx]
                     )
                 target.set_openmm_system(openmm_system)
-                target.run()
-                rss = target.rss
-                log_norm_factor = target.log_norm_factor
-                logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
+                try:
+                    target.run()
+                    rss = target.rss
+                    log_norm_factor = target.log_norm_factor
+                    logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
+                    results_dict["rss"][target_idx] = target.rss
+                    results_dict["log_norm_factor"][target_idx] = target.log_norm_factor
+                except:
+                    logP_likelihood = -99999999999999999.
+                    results_dict["rss"][target_idx] = -9999999999999999.
+                    results_dict["log_norm_factor"][target_idx] = target.log_norm_factor
 
-                results_dict["rss"][target_idx] = target.rss
-                results_dict["log_norm_factor"][target_idx] = target.log_norm_factor
             if return_results_dict:
                 results_all_dict[sys_name].append(results_dict)
 
@@ -285,9 +290,6 @@ class Target(object):
                 target_strc_copy1[a1] = target_strc_copy2[a2]
 
             self.target_strcs[strc_idx] = target_strc_copy1
-
-        del target_strc_copy1, target_strc_copy2
-        del G1, G2, GM
 
     def run(self):
 

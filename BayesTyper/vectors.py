@@ -733,6 +733,44 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         return self.parameter_manager.N_systems
 
     
+    def swap_types(self, source_index, target_index):
+
+        if source_index == -1:
+            source_index = self.force_group_count - 1
+        if target_index == -1:
+            target_index = self.force_group_count - 1
+
+        if source_index > self.force_group_count-1 or source_index < 0:
+            raise ValueError("source_index must be >0 and <= force_group_count")
+        if target_index > self.force_group_count-1 or target_index < 0:
+            raise ValueError("target_index must be >0 and <= force_group_count")
+
+        if source_index == target_index:
+            return
+
+        start = source_index * self.parameters_per_force_group
+        stop  = start + self.parameters_per_force_group
+        source_values_0 = self.vector_0[start:stop]
+        source_mapped = self[start:stop]
+
+        start = target_index * self.parameters_per_force_group
+        stop  = start + self.parameters_per_force_group
+        target_values_0 = self.vector_0[start:stop]
+        target_mapped = self[start:stop]
+
+        self.set_parameters_by_force_group(
+            source_index,
+            target_mapped,
+            target_values_0
+            )
+
+        self.set_parameters_by_force_group(
+            target_index,
+            source_mapped,
+            source_values_0
+            )
+
+
     def copy(self, include_systems=False, rebuild_to_old_systems=False):
 
         import copy
@@ -1214,7 +1252,7 @@ class SmartsForceFieldParameterVector(ForceFieldParameterVector):
         for smarts_manager in init_smarts_manager_list:
             counts = 0
             for a in smarts_manager.allocations:
-                self.smarts_allocations.append(a)
+                self.smarts_allocations.classappend(a)
                 self.smarts_manager_allocations.append(idx)
                 self.smarts_manager_allocations_mapping.append(counts)
                 counts += 1
@@ -1242,6 +1280,11 @@ class SmartsForceFieldParameterVector(ForceFieldParameterVector):
 
 
     def swap_smarts(self, source_index, target_index):
+
+        self.swap_types(source_index, target_index)
+
+
+    def swap_types(self, source_index, target_index):
 
         import copy
         import numpy as np
@@ -1283,27 +1326,7 @@ class SmartsForceFieldParameterVector(ForceFieldParameterVector):
         self.smarts_manager_allocations_mapping[source_indices] = target_smarts_manager_allocations_mapping
         self.smarts_manager_allocations_mapping[target_indices] = source_smarts_manager_allocations_mapping
 
-        start = source_index * self.parameters_per_force_group
-        stop  = start + self.parameters_per_force_group
-        source_values_0 = self.vector_0[start:stop]
-        source_mapped = self[start:stop]
-
-        start = target_index * self.parameters_per_force_group
-        stop  = start + self.parameters_per_force_group
-        target_values_0 = self.vector_0[start:stop]
-        target_mapped = self[start:stop]
-
-        self.set_parameters_by_force_group(
-            source_index,
-            target_mapped,
-            target_values_0
-            )
-
-        self.set_parameters_by_force_group(
-            target_index,
-            source_mapped,
-            source_values_0
-            )
+        super().swap_types(source_index, target_index)
 
 
     def set_inactive(self, force_group_idx):

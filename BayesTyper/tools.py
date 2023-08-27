@@ -56,7 +56,7 @@ get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 def get_plots(
     systemmanager,
-    title_dict=None,
+    title_dict=dict(),
     name_reference_level_of_theory="b3lyp/dzvp",
     big_plot=False, 
     add_plots=0, 
@@ -683,8 +683,9 @@ def generate_systemmanager(
                                             "ene_weighting": ene_weighting,
                                         }
                     if torsion_geo_list:
-                        sys.add_target(EnergyTarget, target_dict_torsion)
-                        N_data_points += len(torsion_geo_list)
+                        if target_dict_torsion["structures"]:
+                            sys.add_target(EnergyTarget, target_dict_torsion)
+                            N_data_points += len(torsion_geo_list)
 
         if weight_geo:
             if len(final_geo_list) > 0:
@@ -697,8 +698,9 @@ def generate_systemmanager(
                                     "denom_torsion" : 2.0e+1 * _ANGLE * error_scale,
                                     "weight"       : float(weight_geo),
                                   }
-                sys.add_target(GeoTarget, target_dict_geo)
-                N_data_points += len(final_geo_list) * (sys.N_atoms * 3. - 6.)
+                if target_dict_geo["structures"]:
+                    sys.add_target(GeoTarget, target_dict_geo)
+                    N_data_points += len(final_geo_list) * (sys.N_atoms * 3. - 6.)
 
         if weight_vib:
             if len(final_geo_list) > 0 and len(hessian_list) > 0:
@@ -710,8 +712,9 @@ def generate_systemmanager(
                                    "denom_freq"   : 200. * _WAVENUMBER * error_scale, 
                                    "weight"       : float(weight_vib),
                                 }
-                sys.add_target(NormalModeTarget, target_dict_nm)
-                N_data_points += len(final_geo_list)
+                if target_dict_nm["structures"]:
+                    sys.add_target(NormalModeTarget, target_dict_nm)
+                    N_data_points += len(final_geo_list)
 
         if weight_offeq:
             if len(off_geo_list) > 0:
@@ -723,8 +726,9 @@ def generate_systemmanager(
                                     "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale,
                                     "weight"       : float(weight_offeq),
                                 }
-                sys.add_target(EnergyTarget, target_dict_ene)
-                N_data_points += len(off_geo_list)
+                if target_dict_ene["structures"]:
+                    sys.add_target(EnergyTarget, target_dict_ene)
+                    N_data_points += len(off_geo_list)
 
         if weight_force:
             if len(off_geo_list) > 0:
@@ -739,11 +743,12 @@ def generate_systemmanager(
                                     "denom_angle"  : 5.0e-1 * _FORCE * error_scale,
                                     "weight"       : float(weight_force),
                                 }
-                if force_projection:
-                    sys.add_target(ForceProjectionMatchingTarget, target_dict_frc)
-                else:
-                    sys.add_target(ForceMatchingTarget, target_dict_frc)
-                N_data_points += len(target_dict_frc["structures"])
+                if target_dict_frc["structures"]:
+                    if force_projection:
+                        sys.add_target(ForceProjectionMatchingTarget, target_dict_frc)
+                    else:
+                        sys.add_target(ForceMatchingTarget, target_dict_frc)
+                    N_data_points += len(target_dict_frc["structures"])
         
     return systemmanager, N_data_points
 

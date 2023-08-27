@@ -10,7 +10,6 @@
 
 import numpy as np
 import copy
-from itertools import permutations
 import openmm
 from openmm import unit
 from .constants import _UNIT_QUANTITY
@@ -30,7 +29,8 @@ from .constants import (_LENGTH,
                         _FORCE_CONSTANT_ANGLE,
                         _FORCE_CONSTANT_TORSION,
                         _FORCE,
-                        _INACTIVE_GROUP_IDX)
+                        _INACTIVE_GROUP_IDX
+                        )
 
 # ==============================================================================
 # PRIVATE SUBROUTINES
@@ -1051,6 +1051,8 @@ class ParameterManager(object):
         self, 
         system: System) -> bool:
 
+        from itertools import permutations
+
         found_force = False
         for force_idx, force in enumerate(system.openmm_system.getForces()):
             if force.__class__.__name__ == self.force_tag:
@@ -1140,7 +1142,7 @@ class ParameterManager(object):
             if force_ranks[force_entity_1] != -1:
                 continue
             atom_idxs_1  = atom_list[force_entity_1]
-            atom_ranks_1 = tuple([system.ranks[a_idx] for a_idx in atom_idxs_1])
+            atom_ranks_1 = [system.ranks[a_idx] for a_idx in atom_idxs_1]
             next_rank    = max(self.max_rank, *force_ranks) + 1
             force_ranks[force_entity_1] = next_rank
             for force_entity_2 in range(force_entity_1 + 1, N_force_entites):
@@ -1148,11 +1150,12 @@ class ParameterManager(object):
                     continue
                 atom_idxs_2  = atom_list[force_entity_2]
                 atom_ranks_2 = [system.ranks[a_idx] for a_idx in atom_idxs_2]
-                found_forcecontainer_match = False
-                for atom_ranks_2_perm in list(permutations(atom_ranks_2)):
-                    if atom_ranks_2_perm == atom_ranks_1:
-                        found_forcecontainer_match = True
-                        break
+                if atom_ranks_2 == atom_ranks_1:
+                    found_forcecontainer_match = True
+                elif atom_ranks_2[::-1] == atom_ranks_1:
+                    found_forcecontainer_match = True
+                else:
+                    found_forcecontainer_match = False
                 if found_forcecontainer_match:
                     force_ranks[force_entity_2] = next_rank
 
