@@ -212,10 +212,6 @@ class Target(object):
         self.diff_dict = OrderedDict()
         self.rss_dict  = OrderedDict()
 
-        self.weight        = 1.
-        if "weight" in target_dict:
-            self.weight = target_dict["weight"]
-
         self.target_strcs = list()
         for target_strc in target_dict["structures"]:
             target_strc = target_strc.value_in_unit(_LENGTH)
@@ -352,11 +348,9 @@ class GeoTarget(Target):
     @property
     def log_norm_factor(self):
 
-        value  = self.N_bonds * np.log(self.denom_bond.value_in_unit(_LENGTH))
-        value += self.N_angles * np.log(self.denom_angle.value_in_unit(_ANGLE))
+        value  = self.N_bonds    * np.log(self.denom_bond.value_in_unit(_LENGTH))
+        value += self.N_angles   * np.log(self.denom_angle.value_in_unit(_ANGLE))
         value += self.N_torsions * np.log(self.denom_torsion.value_in_unit(_ANGLE))
-        value += (self.N_bonds + self.N_angles + self.N_torsions) * -0.5 * np.log(self.N_atoms * 3)
-        value += (self.N_bonds + self.N_angles + self.N_torsions) * -0.5 * np.log(self.weight)
 
         return value
 
@@ -480,10 +474,6 @@ class GeoTarget(Target):
             self.rss_angle    = 1./(self.denom_angle)**2   * rss_angle
             self.rss_torsion  = 1./(self.denom_torsion)**2 * rss_torsion
 
-            self.rss_bond    *= self.weight
-            self.rss_angle   *= self.weight
-            self.rss_torsion *= self.weight
-
             ### DIFF calcs
             self.diff_bond     = diff_bond
             self.diff_angle    = diff_angle
@@ -545,7 +535,6 @@ class NormalModeTarget(Target):
     def log_norm_factor(self):
 
         value  = self.N_freqs * np.log(self.denom_frq.value_in_unit(_WAVENUMBER))
-        value *= -0.5 * np.log(self.weight)
 
         return value
 
@@ -601,7 +590,7 @@ class NormalModeTarget(Target):
                 freqs    = compute_freqs(hessian, self.masses)
 
                 diff    = abs(freqs - self.target_freqs[strc_idx])
-                rss     = self.weight * diff**2 * (1./self.denom_frq)**2
+                rss     = diff**2 * (1./self.denom_frq)**2
 
                 self.diff_dict[strc_idx] = {i:f for i,f in enumerate(diff)}
                 self.rss_dict[strc_idx]  = {i:f for i,f in enumerate(rss)}
@@ -682,8 +671,6 @@ class ForceProjectionMatchingTarget(Target):
         value  = self.N_bonds * np.log(self.denom_bond.value_in_unit(_LENGTH))
         value += self.N_angles * np.log(self.denom_angle.value_in_unit(_ANGLE))
         value += self.N_torsions * np.log(self.denom_torsion.value_in_unit(_ANGLE))
-        value += (self.N_bonds + self.N_angles + self.N_torsions) * -0.5 * np.log(self.N_atoms * 3)
-        value += (self.N_bonds + self.N_angles + self.N_torsions) * -0.5 * np.log(self.weight)
 
         return value
 
@@ -801,8 +788,7 @@ class ForceProjectionMatchingTarget(Target):
                     diff_torsion += diff
                     _rss_torsion += diff**2
 
-            norm_factor  = self.weight
-            norm_factor /= float(self.N_atoms * 3)
+            norm_factor  = 1.
 
             rss_bond    += _rss_bond * norm_factor
             rss_angle   += _rss_angle * norm_factor
@@ -884,7 +870,6 @@ class ForceMatchingTarget(Target):
     def log_norm_factor(self):
 
         value  = self.N_atoms * 3 * np.log(self.denom_force.value_in_unit(_FORCE))
-        value += -0.5 * np.log(self.weight)
 
         return value
 
@@ -913,7 +898,7 @@ class ForceMatchingTarget(Target):
             ### and then taking square
             diff         = abs(forces - target_force).in_units_of(_FORCE)
             diff2        = np.sum(diff**2, axis=1)
-            rss          = self.weight * diff2 * 1./self.denom_force**2
+            rss          = diff2 * 1./self.denom_force**2
             rss         /= float(self.N_atoms * 3)
 
             self.diff_dict[strc_idx] = diff.tolist() * _FORCE
@@ -1019,10 +1004,6 @@ class EnergyTarget(Target):
     def log_norm_factor(self):
 
         value  = np.log(self.denom_ene.value_in_unit(_ENERGY_PER_MOL))
-        ### This will exclude the weight (0) at energy minimum
-        valids = np.where(self.target_denom > 0.)
-        value += -0.5 * np.sum(np.log(self.target_denom[valids]))
-        value += -0.5 * np.log(self.weight)
 
         return value
 
@@ -1095,7 +1076,7 @@ class EnergyTarget(Target):
             diff    = pot_ene - target_pot_ene
             diff    = diff.in_units_of(_ENERGY_PER_MOL)
             diff2   = diff**2
-            rss     = self.weight * diff2 * self.target_denom[strc_idx] / self.denom_ene**2
+            rss     = diff2 * self.target_denom[strc_idx] / self.denom_ene**2
 
             self.diff_dict[strc_idx] = diff
             self.rss_dict[strc_idx]  = rss
