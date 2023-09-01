@@ -175,8 +175,8 @@ def draw_bitvector_from_candidate_list(
                     logP_list += logPrior_all_list[type_j]
 
             logP_sum = logP_list[0]
-            for p in logP_list[1:]:
-                logP_sum = np.logaddexp(p, logP_sum)
+            for logp in logP_list[1:]:
+                logP_sum = np.logaddexp(logp, logP_sum)
             logP_list_norm = logP_list - logP_sum
             P_list = np.exp(logP_list_norm)
 
@@ -328,8 +328,8 @@ def draw_bitvector_from_bits(
                         logP_list += logPrior_all_list[type_j]
 
                 logP_sum = logP_list[0]
-                for p in logP_list[1:]:
-                    logP_sum = np.logaddexp(p, logP_sum)
+                for logaddexp in logP_list[1:]:
+                    logP_sum = np.logaddexp(logaddexp, logP_sum)
                 logP_list_norm = logP_list - logP_sum
                 P_list = np.exp(logP_list_norm)
 

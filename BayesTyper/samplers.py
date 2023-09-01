@@ -236,7 +236,10 @@ class ForceFieldSampler(BaseOptimizer):
 
     def draw_parameter_vector(
         self,
-        mngr_idx
+        mngr_idx,
+        max_on=0.1,
+        theta=1.,
+        alpha=1.,
         ):
 
         """
@@ -248,6 +251,7 @@ class ForceFieldSampler(BaseOptimizer):
         from scipy import stats
         import numpy as np
         from . import draw_typing_vector, typing_prior
+        from .bitvector_typing import bitvec_hierarchy_to_allocations
 
         normalize_gradients = False
 
@@ -258,9 +262,9 @@ class ForceFieldSampler(BaseOptimizer):
         sig_symm2 = sig_symm**2
 
         ### Randomly decide if we should split
-        ### merge, or propage.
+        ### death, or propage.
         ### 0: split
-        ### 1: merge
+        ### 1: death
         ### 2: propagate
         kernel_p  = [1.,1.,2.]
         kernel_p /= np.sum(kernel_p)
@@ -269,12 +273,12 @@ class ForceFieldSampler(BaseOptimizer):
             p=kernel_p
             )
         split = False
-        merge = False
+        death = False
         propagate = False
         if kernel_choice == 0:
             split = True
         elif kernel_choice == 1:
-            merge = True
+            death = True
         elif kernel_choice == 2:
             propagate = True
         else:
@@ -288,80 +292,147 @@ class ForceFieldSampler(BaseOptimizer):
         log_P_old = self.calc_log_likelihood() + np.sum(self.calc_log_prior())
 
         pvec_list, bitvec_list_list = self.generate_parameter_vectors([mngr_idx])
+        bsm, bitvec_list_alloc_dict = self.generate_bitsmartsmanager(mngr_idx)
         pvec = pvec_list[0]
-        bitvec_list = bitvec_list_list[0]
+        N_types = pvec.force_group_count
+        bitvec_type_list = bitvec_list_list[0]
 
         if split:
-            print("split ...")
-            ### First do the lifting move.
-            ### Randomly select one parameter type
+            if self.verbose:
+                print("split ...")
 
-            N_types   = pvec.force_group_count
-            type_i = np.random.randint(0, N_types)
-            type_j = type_i + 1
+            likelihood_func = LikelihoodVectorized(
+                [pvec],
+                self.targetcomputer
+                )
 
+            logL_old = likelihood_func()                
+            logP_prior_old = 0.
+            for _mngr_idx in range(self.N_mngr):
+                if mngr_idx == _mngr_idx:
+                   _bitvec_type_list = bitvec_type_list
+                   _bsm = bsm
+                else:
+                    _, _bitvec_type_list = self.generate_parameter_vectors(_mngr_idx)
+                    _bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
+                for _type_i, _b in enumerate(_bitvec_type_list):
+                    logP_prior_old += typing_prior(
+                                    _b, _bsm, 
+                                    _type_i, 
+                                    theta, alpha
+                                    )
+            logP_prior_old += self.calc_log_prior()
+            log_P_old = logL_old + logP_prior_old
+            
+            ### STEP 1:
+            ### Figure out the type we want to select for lifting.
+            ### This is done by computing gradient scores and treating
+            ### them as probabilities. In addition, we use a prior on
+            ### the bitvectors to enable lifting to less specific bitvector
+            ### spaces.
+
+            ### Compute gradient scores.
+            worker_id_list, alloc_bitvec_degeneracy_dict = self.split_bitvector(
+                mngr_idx,
+                bitvec_type_list,
+                [i for i in range(self.N_systems)]
+                )
+
+            ast_logP_dict = dict()
+            for worker_id in worker_list:
+                
+                grad_score_dict, \
+                grad_norm_dict, \
+                allocation_list_dict, \
+                selection_list_dict, \
+                type_list_dict = ray.get(worker_id)
+
+                score_dict = dict()
+                N_trials = 0
+                for trial_idx in grad_score_dict:
+
+                    grad_score = grad_score_dict[trial_idx]
+                    grad_norm  = grad_norm_dict[trial_idx]
+                    allocation_list = allocation_list_dict[trial_idx]
+                    selection_list  = selection_list_dict[trial_idx]
+                    type_list  = type_list_dict[trial_idx]
+
+                    N_trials += 1
+
+                    for g, n, a, s, t in zip(grad_score, grad_norm, allocation_list, selection_list, type_list):
+                        ast = a,s,t
+                        if np.all(np.abs(n) < norm_cutoff):
+                            pass
+                        else:
+                            ### Only consider the absolute value of the gradient score, not the sign
+                            if abs_grad_score:
+                                _g = [abs(gg) for gg in g]
+                                g  = _g
+                            if ast in score_dict:
+                                score_dict[ast] += g
+                            else:
+                                score_dict[ast] = g
+
+                for ast in score_dict:
+                    score_dict[ast] /= N_trials
+
+                for ast in score_dict:
+                    _, _, type_ = ast
+                    type_i = type_[0]
+                    for b in alloc_bitvec_degeneracy_dict[ast]:
+                        bitvec_type_list.insert(type_i, b)
+                        allocations = [-1 for _ in pvec.allocations]
+                        bitvec_hierarchy_to_allocations(
+                            bitvec_list_alloc_dict,
+                            bitvec_type_list,
+                            allocations,
+                            )
+                        ### If true, this bitvec is valid
+                        if allocations.count(-1) == 0:
+                            logP_prior = typing_prior(
+                                b, bsm, type_i, theta, alpha
+                                )
+                            ast_logP_dict[(ast,b)] = np.logaddexp(
+                                logP_prior, np.log(score_dict[ast])
+                                )
+                        bitvec_type_list.pop(type_i)
+
+            logP_sum = 0.
+            for i, ast_b in enumerate(ast_logP_dict.keys()):
+                logp = ast_logP_dict[ast_b]
+                if i == 0:
+                    logP_sum = logp
+                else:
+                    logP_sum = np.logaddexp(logp, logP_sum)
+            P_values = list()
+            ast_b_keys = list()
+            for ast_b in ast_prob_dict:
+                ast_logP_dict[ast_b] -= logP_sum
+                ast_b_keys.append(ast_b)
+                P_values.append(ast_logP_dict[ast_b])
+            ast_b_keys = np.array(ast_b_keys, dtype=object)
+            P_values = np.array(P_values, dtype=float)
+            new_ast_b  = np.random.choice(ast_b_keys, p=P_values)
+            logP_type_selection = ast_logP_dict[new_ast_b]
+            ast, b_new = new_ast_b
+            _, _, type_ = ast
+            type_i = type_[0]
+            type_j = type_[1]
+            bitvec_type_list.insert(type_i, b_new)
+            allocations = [-1 for _ in pvec.allocations]
+            bitvec_hierarchy_to_allocations(
+                bitvec_list_alloc_dict,
+                bitvec_type_list,
+                allocations,
+                )
             pvec.duplicate(type_i)
             pvec.swap_types(N_types, type_j)
+            pvec.allocations[:] = allocations
             pvec.apply_changes()
 
-            selection_i = list()
-            for i, a in enumerate(pvec.allocations):
-                if a == type_i:
-                    selection_i.append(i)
 
-            _, bitvec_alloc_dict_list = bsm.prepare_bitvectors()
-
-            bsm.and_rows(
-                allocations=selection_i
-                )
-
-            ### Split the parameter type randomly
-            alloc     = pvec.allocations.index([type_i])[0]
-            ### Note: We canot use `pvec.force_group_histogram` here, since it
-            ###       will not contain counts from `_INACTIVE_GROUP_IDX`
-            N_bonds_i = alloc.size
-
-            ### Case if we consider all possible splits
-            if self.split_size == 0:
-                pvec.allocations[alloc] = np.random.choice(
-                    [type_i, pvec.force_group_count-1],
-                    size=alloc.size,
-                    replace=True
-                    )
-                alloc_omit_list[pvec_idx] = alloc
-                N_possibilities = 2**N_bonds_i - 2
-            ### Case if we consider only splits of size `self.split_size`
-            else:
-                from scipy import special
-                _split_size = self.split_size
-                if self.split_size >= N_bonds_i:
-                    _split_size = N_bonds_i
-                alloc_new = np.random.choice(
-                    alloc,
-                    size=_split_size,
-                    replace=True
-                    )
-                pvec.allocations[alloc_new] = pvec.force_group_count-1
-                ### Must still write old `alloc` in `alloc_omit_list` here.
-                alloc_omit_list[pvec_idx] = alloc
-                N_possibilities = special.binom(
-                    N_bonds_i, 
-                    _split_size
-                    )
-            pvec.apply_changes()
-            d_new = norm_distr_zero_centered_symm.rvs(
-                pvec.parameters_per_force_group
-                )
-            first_parm = pvec.parameters_per_force_group * (
-                pvec.force_group_count - 1
-                )
-            last_parm  = first_parm + pvec.parameters_per_force_group
-            pvec[first_parm:last_parm] += d_new
-            pvec.apply_changes()
-
-            alpha_list  = [1.e+3 * np.ones(pvec.force_group_count, dtype=float)]
-            weight_list = [1.e+3 * np.ones(pvec.force_group_count, dtype=float)]
-
+            ### STEP 2: We propose a new parameter vector
+            ### in the lifted space.
             likelihood_func = LikelihoodVectorized(
                 [pvec],
                 self.targetcomputer
@@ -391,199 +462,105 @@ class ForceFieldSampler(BaseOptimizer):
             if normalize_gradients:
                 if grad_bkw_norm > 0.:
                     grad_bkw /= grad_bkw_norm
-
+            pvec.apply_changes()
             likelihood_func.apply_changes(x1)
-            log_P_new = self.calc_log_likelihood() + np.sum(self.calc_log_prior())
+
+            logL_new = likelihood_func()
+            logP_prior_new = 0.
+            for _mngr_idx in range(self.N_mngr):
+                if mngr_idx == _mngr_idx:
+                   _bitvec_type_list = bitvec_type_list
+                   _bsm = bsm
+                else:
+                    _, _bitvec_type_list = self.generate_parameter_vectors(_mngr_idx)
+                    _bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
+                for _type_i, _b in enumerate(_bitvec_type_list):
+                    logP_prior_new += typing_prior(
+                                    _b, _bsm, 
+                                    _type_i, 
+                                    theta, alpha
+                                    )
+            logP_prior_new += self.calc_log_prior()
+            log_P_new = logL_new + logP_prior_new
 
             fwd_diff = x1 - x0 - 0.5 * sig_langevin2 * grad_fwd
             bkw_diff = x0 - x1 - 0.5 * sig_langevin2 * grad_bkw
-
-            ### Note the prefactors are omitted since they are the
-            ### same in fwd and bkw.
-            logQ_fwd = np.sum(fwd_diff**2) + norm_distr_zero_centered_symm.logpdf(d_new).sum()
-            logQ_bkw = np.sum(bkw_diff**2)
-
-            log_alpha  = log_P_new - log_P_old
-            log_alpha += logQ_bkw  - logQ_fwd
-            log_alpha += np.log(N_possibilities)
-            log_alpha -= np.log(N_types+1.)
-            log_alpha -= np.log(N_types)
-
-            print(
-                "Mngr"                        , pvec_idx, "\n",
-                "Allocations"                 , pvec.allocations, "\n",
-                "log_alpha"                   , log_alpha, "\n",
-                "log_P_new"                   , log_P_new,  "\n",
-                "-log_P_old"                  , -log_P_old,  "\n",
-                "logQ_bkw,"                   , logQ_bkw,  "\n",
-                "-logQ_fwd"                   , -logQ_fwd, "\n",
-                "log(N_possibilities)"        , np.log(N_possibilities), "\n",
-                "-log(N_types)-log(N_types+1)", -np.log(N_types), -np.log(N_types+1.), "\n",
-                )
-
-        elif merge:
-
-            print("merge ...")
-            pvec_idx = np.random.choice(
-                np.arange(self.N_mngr)
-                )
-            pvec = self.pvec_list_all[pvec_idx]
-            sele = np.arange(
-                pvec.force_group_count,
-                dtype=int
-                )
-            if death_move:
-                _sele = np.append(sele, _INACTIVE_GROUP_IDX)
-                sele = _sele
-            ### type_i: The type that type_j is merged into
-            ### type_j: The type we want to eliminate
-            type_i, type_j = np.random.choice(
-                sele,
-                size=2,
-                replace=False
-                )
-            ### If type_j is `_INACTIVE_GROUP_IDX`, we must
-            ### swap type_i and type_j. The inactive type cannot
-            ### be eliminated.
-            if type_j == _INACTIVE_GROUP_IDX:
-                type_j = type_i
-                type_i = _INACTIVE_GROUP_IDX
-
-            ### First do the propagation
-            x0 = likelihood_func.pvec
-            likelihood_func = LikelihoodVectorized(
-                [pvec],
-                self.targetcomputer
-                )
-
-            grad_fwd = likelihood_func.grad(
-                x0[:], 
-                grad_diff=self.grad_diff,
-                use_jac=self.use_jac
-                )
-
-            grad_fwd_norm = np.linalg.norm(grad_fwd)
-            if normalize_gradients:
-                if grad_fwd_norm > 0.:
-                    grad_fwd /= grad_fwd_norm
-
-            W  = norm_distr_zero_centered_langevin.rvs(x0.size)
-            x1 = x0 + 0.5 * sig_langevin2 * grad_fwd + sig_langevin2 * W
-
-            ### Then compute backwards propability.
-            grad_bkw = likelihood_func.grad(
-                x1, 
-                grad_diff=self.grad_diff,
-                use_jac=self.use_jac
-                )
-            grad_bkw_norm = np.linalg.norm(grad_bkw)
-            if normalize_gradients:
-                if grad_bkw_norm > 0.:
-                    grad_bkw /= grad_bkw_norm
-
-            fwd_diff = x1 - x0 - 0.5 * sig_langevin2 * grad_fwd
-            bkw_diff = x0 - x1 - 0.5 * sig_langevin2 * grad_bkw
-
-            ### Then do the lifting (i.e. contraction) move.
-            ### Randomly select two of the parameter types
-            N_types   = pvec.force_group_count
-            N_bonds_i = pvec.allocations.index([type_i])[0].size
-            N_bonds_j = pvec.allocations.index([type_j])[0].size
-
-            if type_i == _INACTIVE_GROUP_IDX:
-                value_i      = [0. * _FORCE_CONSTANT_TORSION for _ in range(pvec.parameters_per_force_group)]
-            else:
-                first_parm_i = pvec.parameters_per_force_group * type_i
-                last_parm_i  = first_parm_i + pvec.parameters_per_force_group
-                value_i      = pvec.vector_k[first_parm_i:last_parm_i]
-            first_parm_j = pvec.parameters_per_force_group * type_j
-            last_parm_j  = first_parm_j + pvec.parameters_per_force_group
-            value_j      = pvec.vector_k[first_parm_j:last_parm_j]
-
-            ### Important. Compute the difference using the transformation
-            ### on type_j (would also work with transformation on type_i).
-            real_cp    = copy.deepcopy(pvec.vector_k)
-            real_cp[first_parm_j:last_parm_j] = value_j
-            d_old      = pvec.get_transform(real_cp)[first_parm_j:last_parm_j]
-            real_cp[first_parm_j:last_parm_j] = value_i
-            d_old     -= pvec.get_transform(real_cp)[first_parm_j:last_parm_j]
-            d_old      = np.array(d_old, dtype=float)
-
-            alloc_j = pvec.allocations.index([type_j])[0]
-
-            pvec.allocations[alloc_j] = type_i
-            pvec.apply_changes()
-            pvec.remove(type_j)
-            pvec.apply_changes()
-
-            alloc_omit_list[pvec_idx] = alloc_j
-
-            likelihood_func.apply_changes(x1)
-            log_P_new = self.calc_log_likelihood() + np.sum(self.calc_log_prior())
 
             ### Note the prefactors are omitted since they are the
             ### same in fwd and bkw.
             logQ_fwd = np.sum(fwd_diff**2)
-            logQ_bkw = np.sum(bkw_diff**2) + norm_distr_zero_centered_symm.logpdf(d_old).sum()
-
-            if self.split_size == 0:
-                N_possibilities = 2**N_bonds_i - 2
-            ### Case if we consider only splits of size `self.split_size`
-            else:
-                from scipy import special
-                _split_size = self.split_size
-                if self.split_size >= N_bonds_i:
-                    _split_size = N_bonds_i
-                N_possibilities = special.binom(
-                    N_bonds_i, 
-                    _split_size
-                    )
+            logQ_bkw = np.sum(bkw_diff**2)
 
             log_alpha  = log_P_new - log_P_old
             log_alpha += logQ_bkw  - logQ_fwd
-            log_alpha += np.log(N_types)
-            log_alpha += np.log(N_types-1.)
-            log_alpha -= np.log(N_possibilities)
+            log_alpha -= logP_type_selection
+            log_alpha -= np.log(N_types+1.)
+            log_alpha -= np.log(N_types)
 
-            print(
-                "Mngr"                        , pvec_idx, "\n",
-                "Allocations"                 , pvec.allocations, "\n",
-                "log_alpha"                   , log_alpha, "\n",
-                "log_P_new"                   , log_P_new,  "\n",
-                "-log_P_old"                  , -log_P_old,  "\n",
-                "logQ_bkw"                    , logQ_bkw,  "\n",
-                "-logQ_fwd"                   , -logQ_fwd, "\n",
-                "log(N_types)+log(N_types-1)" , np.log(N_types), np.log(N_types-1.), "\n",
-                "-log(N_possibilities)"       , -np.log(N_possibilities), "\n",
+            if self.verbose:
+                sma = bsm.bitvector_to_smarts(b_new)
+                print(
+                    "mngr:", mngr_idx,
+                    "type i:", type_i,
+                    "type j:", type_j,
                 )
+                for idx, b in enumerate(bitvec_type_list):
+                    sma = bsm.bitvector_to_smarts(b)
+                    print(
+                        f"Type {idx}({pvec.allocations.count(idx)})", sma
+                    )
+
+                print(
+                    "log_alpha", log_alpha, "\n",
+                    "log_P_new", log_P_new,  "\n",
+                    "log_P_old", log_P_old,  "\n",
+                    "logQ_bkw,", logQ_bkw,  "\n",
+                    "logQ_fwd", logQ_fwd, "\n",
+                    "log(type_selection)", logP_type_selection, "\n",
+                    )
 
         elif propagate:
-            print("propagate ...")
-            pvec_idx = np.random.choice(
-                np.arange(self.N_mngr)
-                )
-            pvec = self.pvec_list_all[pvec_idx]
-            ### First do the propagation
+            if self.verbose:
+                print("propagate ...")
+
             likelihood_func = LikelihoodVectorized(
                 [pvec],
                 self.targetcomputer
                 )
+
+            logL_old = likelihood_func()
+            logP_prior_old = 0.
+            for _mngr_idx in range(self.N_mngr):
+                if mngr_idx == _mngr_idx:
+                   _bitvec_type_list = bitvec_type_list
+                   _bsm = bsm
+                else:
+                    _, _bitvec_type_list = self.generate_parameter_vectors(_mngr_idx)
+                    _bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
+                for _type_i, _b in enumerate(_bitvec_type_list):
+                    logP_prior_old += typing_prior(
+                                    _b, _bsm, 
+                                    _type_i, 
+                                    theta, alpha
+                                    )
+            logP_prior_old += self.calc_log_prior()
+            log_P_old = logL_old + logP_prior_old
+
             x0 = likelihood_func.pvec
             grad_fwd = likelihood_func.grad(
                 x0[:], 
                 grad_diff=self.grad_diff,
                 use_jac=self.use_jac
                 )
-
             grad_fwd_norm = np.linalg.norm(grad_fwd)
             if normalize_gradients:
                 if grad_fwd_norm > 0.:
                     grad_fwd /= grad_fwd_norm
 
             W  = norm_distr_zero_centered_langevin.rvs(x0.size)
+            if self.jacobian_masses:
+                W *= np.ones_like(W) / np.array(likelihood_func.jacobian)**2
             x1 = x0 + 0.5 * sig_langevin2 * grad_fwd + sig_langevin2 * W
-
-            ### Then compute backwards propability.
             grad_bkw = likelihood_func.grad(
                 x1[:], 
                 grad_diff=self.grad_diff,
@@ -593,12 +570,29 @@ class ForceFieldSampler(BaseOptimizer):
             if normalize_gradients:
                 if grad_bkw_norm > 0.:
                     grad_bkw /= grad_bkw_norm
+            pvec.apply_changes()
+            likelihood_func.apply_changes(x1)
+
+            logL_new = likelihood_func()
+            logP_prior_new = 0.
+            for _mngr_idx in range(self.N_mngr):
+                if mngr_idx == _mngr_idx:
+                   _bitvec_type_list = bitvec_type_list
+                   _bsm = bsm
+                else:
+                    _, _bitvec_type_list = self.generate_parameter_vectors(_mngr_idx)
+                    _bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
+                for _type_i, _b in enumerate(_bitvec_type_list):
+                    logP_prior_new += typing_prior(
+                                    _b, _bsm, 
+                                    _type_i, 
+                                    theta, alpha
+                                    )
+            logP_prior_new += self.calc_log_prior()
+            log_P_new = logL_new + logP_prior_new
 
             fwd_diff = x1 - x0 - 0.5 * sig_langevin2 * grad_fwd
             bkw_diff = x0 - x1 - 0.5 * sig_langevin2 * grad_bkw
-
-            likelihood_func.apply_changes(x1)
-            log_P_new = self.calc_log_likelihood() + np.sum(self.calc_log_prior())
 
             ### Note the prefactors are omitted since they are the
             ### same in fwd and bkw.
@@ -608,91 +602,29 @@ class ForceFieldSampler(BaseOptimizer):
             log_alpha  = log_P_new - log_P_old
             log_alpha += logQ_bkw  - logQ_fwd
 
-            print(
-                "delta"      , x1 - x0, "\n",
-                "log_alpha"  , log_alpha, "\n",
-                "log_P_new"  , log_P_new,  "\n",
-                "-log_P_old" , -log_P_old,  "\n",
-                "logQ_bkw"   , logQ_bkw,  "\n",
-                "-logQ_fwd"  , -logQ_fwd, "\n",
+            if self.verbose:
+                sma = bsm.bitvector_to_smarts(b_new)
+                print(
+                    "mngr:", mngr_idx,
+                    "type i:", type_i,
+                    "type j:", type_j,
                 )
+                for idx, b in enumerate(bitvec_type_list):
+                    sma = bsm.bitvector_to_smarts(b)
+                    print(
+                        f"Type {idx}({pvec.allocations.count(idx)})", sma
+                    )
+
+                print(
+                    "log_alpha", log_alpha, "\n",
+                    "log_P_new", log_P_new,  "\n",
+                    "log_P_old", log_P_old,  "\n",
+                    "logQ_bkw,", logQ_bkw,  "\n",
+                    "logQ_fwd", logQ_fwd, "\n",
+                    )
 
         elif death:
-
-            print("death ...")
-            ### Find empty types
-            pvec_idx = np.random.choice(
-                np.arange(self.N_mngr)
-                )
-            if self.pvec_list_all[pvec_idx].force_group_count == 0:
-                print("Rejected.")
-                return 
-            pvec = self.pvec_list_all[pvec_idx]
-            ### This is the type we want to duplicate from
-            valids_empty = np.where(pvec.force_group_histogram == 0)[0]
-            N_all   = pvec.force_group_count
-            N_empty = valids_empty.size
-            if N_empty == 0:
-                print("Rejected.")
-                return 
-            ### Type selected for death move
-            type_i = np.random.choice(
-                valids_empty,
-                replace=True
-                )
-            ### Type selected for birth move. We will duplicate from
-            ### this type and propagate using the symmetric kernel.
-            type_j = np.random.choice(
-                np.r_[:type_i, (type_i+1):pvec.force_group_count]
-                )
-            ### P_death: 1./N_empty
-            ### P_birth: 1./(N_all-1) * P(x)
-            first_parm_i = pvec.parameters_per_force_group * type_i
-            last_parm_i  = first_parm_i + pvec.parameters_per_force_group
-            value_i      = pvec.vector_k[first_parm_i:last_parm_i]
-            first_parm_j = pvec.parameters_per_force_group * type_j
-            last_parm_j  = first_parm_j + pvec.parameters_per_force_group
-            value_j      = pvec.vector_k[first_parm_j:last_parm_j]
-
-            real_cp    = copy.deepcopy(pvec.vector_k)
-            ### d_new: distance for birth proposal
-            d_old      = pvec.get_transform(real_cp)[first_parm_i:last_parm_i]
-            real_cp[first_parm_i:last_parm_i] = value_j
-            d_old     -= pvec.get_transform(real_cp)[first_parm_i:last_parm_i]
-            d_old      = np.array(d_old, dtype=float)
-
-            logQ_fwd = 0.
-            logQ_bkw = norm_distr_zero_centered_symm.logpdf(d_old).sum()
-
-            pvec.remove(type_i)
-
-            likelihood_func = LikelihoodVectorized(
-                [pvec],
-                self.targetcomputer
-                )
-            x1 = likelihood_func.pvec
-
-            likelihood_func.apply_changes(x1)
-            log_P_new = self.calc_log_likelihood() + np.sum(self.calc_log_prior())
-
-            log_alpha  = log_P_new - log_P_old
-            log_alpha += logQ_bkw  - logQ_fwd
-            log_alpha += np.log(N_empty)
-            log_alpha -= np.log(N_all-1.)
-
-            print(
-                "Mngr"        , pvec_idx, "\n",
-                "log_alpha"   , log_alpha, "\n",
-                "log_P_new"   , log_P_new,  "\n",
-                "-log_P_old"  , -log_P_old,  "\n",
-                "logQ_bkw"    , logQ_bkw,  "\n",
-                "-logQ_fwd"   , -logQ_fwd, "\n",
-                "log(N_empty)", np.log(N_empty), "\n",
-                "-log(N_all-1)", -np.log(N_all-1.), "\n",
-                )
-
-        elif birth:
-            pass
+            
 
         is_accepted = False
         if np.isinf(log_alpha):
