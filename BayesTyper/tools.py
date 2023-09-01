@@ -404,8 +404,8 @@ def get_plots(
 def _remove_types(
     parameter_manager, 
     system_list = None, 
-    remaining_type_idx=-1,
-    set_inactive=False,
+    remaining_type_idx = -1,
+    set_inactive = False,
     ):
 
     from .vectors import ForceFieldParameterVector
@@ -441,7 +441,7 @@ def _remove_types(
 
 def remove_types(
     systemmanager,
-    ParameterManagerDict=dict(),
+    mngr_list = list(),
     ):
     
     from .parameters import (
@@ -449,52 +449,85 @@ def remove_types(
         AngleManager,
         ProperTorsionManager,
         DoubleProperTorsionManager,
-        MultiProperTorsionContainer
+        MultiProperTorsionManager
     )
     from .constants import _INACTIVE_GROUP_IDX
+    from . import system
 
-    if not ParameterManagerDict:
-        ParameterManagerList = {
-            BondManager : None,
-            AngleManager : None,
-            ProperTorsionManager : None,
-            }
+    if len(mngr_list) == 0:
+        mngr_list = [
+            BondManager,
+            AngleManager,
+            MultiProperTorsionManager,
+        ]
 
-    for mngr in ParameterManagerDict:
-        if mngr in [ProperTorsionManager, DoubleProperTorsionManager, MultiProperTorsionContainer]:
+    if isinstance(systemmanager, list):
+        system_list = systemmanager
+    elif isinstance(systemmanager, system.SystemManager):
+        system_list = systemmanager.get_systems()
+    else:
+        raise ValueError(
+            f"Datatype for SystemManager not understood."
+            )
+
+    torsion_mngr_list= (
+        ProperTorsionManager, 
+        DoubleProperTorsionManager, 
+        MultiProperTorsionManager
+        )
+
+    for mngr in mngr_list:
+        if isinstance(mngr, torsion_mngr_list):
             for periodicity in range(1,11):
-                for phase in [0., 90., 180., 270., 320., 360., 40.]:
-                    phase *= np.pi/180.
+                for phase in [0., 40., 90., 180., 270., 320., 360.]:
+                    phase *= np.pi/180.*unit.radian
                     for sign in [-1.,1.]:
                         _remove_types(
-                            parameter_manager=ProperTorsionManager(
+                            parameter_manager = ProperTorsionManager(
                                 periodicity,
-                                sign * phase * unit.radian
+                                phase,
+                                exclude_list = ["periodicity", "phase"],
                             ),
-                            system_list=systemmanager.get_systems(),
-                            remaining_type_idx=_INACTIVE_GROUP_IDX,
-                            set_inactive=True
+                            system_list = system_list,
+                            remaining_type_idx = _INACTIVE_GROUP_IDX,
+                            set_inactive = True
                         )
-        else:            
+
+        elif isinstance(mngr, BondManager):
             _remove_types(
-                parameter_manager=mngr(ParameterManagerDict[mngr]),
-                system_list=systemmanager.get_systems(),
+                parameter_manager=BondManager(),
+                system_list = system_list,
+                set_inactive = False,
             )
+        elif isinstance(mngr, AngleManager):
+            _remove_types(
+                parameter_manager=AngleManager(),
+                system_list = system_list,
+                set_inactive = False,
+            )
+        else:
+            raise ValueError(
+                "Parameter Manager not understood."
+                )
 
 
 def generate_systemmanager(
     smiles_list,
     systemmanager=None, 
-    error_scale=1.0, 
+    error_scale_geo=1.0,
+    error_scale_vib=1.0,
+    error_scale_offeq=1.0,
+    error_scale_torsion=1.0,
+    error_scale_force=1.0,
     optdataset_dict=None, 
     torsiondataset_dict=None,
     forcefield_name="openff_unconstrained-1.3.0.offxml",
     ene_weighting = True,
-    weight_geo = 1,
-    weight_vib = 1,
-    weight_offeq = 1,
-    weight_torsion = 1,
-    weight_force = 0,
+    use_geo = True,
+    use_vib = True,
+    use_offeq = True,
+    use_torsion = True,
+    use_force = False,
     add_units=False,
     force_projection=False,
 ):
@@ -589,7 +622,7 @@ def generate_systemmanager(
 
         print("Adding", smiles)
 
-        if weight_geo or weight_offeq or weight_force or weight_vib:
+        if use_geo or use_offeq or use_force or use_vib:
             key = list(
                 optdataset_dict[smiles].keys()
             )[0]
@@ -601,7 +634,7 @@ def generate_systemmanager(
                 )
             else:
                 continue
-        elif weight_torsion:
+        elif use_torsion:
             key0 = list(
                 torsiondataset_dict[smiles].keys()
             )[0]
@@ -636,22 +669,22 @@ def generate_systemmanager(
         force_list     = list()
         ene_list       = list()
 
-        if weight_geo or weight_offeq or weight_force or weight_vib:
+        if use_geo or use_offeq or use_force or use_vib:
             for conf_i in optdataset_dict[smiles]:
 
-                if weight_geo or weight_vib:
+                if use_geo or use_vib:
                     if "final_geo" in optdataset_dict[smiles][conf_i]:
                         final_geo_list.extend([optdataset_dict[smiles][conf_i]["final_geo"]])
 
-                if weight_offeq or weight_force:
+                if use_offeq or use_force:
                     if "geo_list" in optdataset_dict[smiles][conf_i]:
                         if "ene_list" in optdataset_dict[smiles][conf_i]:
-                            if weight_force:
+                            if use_force:
                                 force_list.extend(optdataset_dict[smiles][conf_i]["force_list"])
                             off_geo_list.extend(optdataset_dict[smiles][conf_i]["geo_list"])
                             ene_list.extend(optdataset_dict[smiles][conf_i]["ene_list"])
 
-                if weight_vib:
+                if use_vib:
                     if "hessian" in optdataset_dict[smiles][conf_i]:
                         if "final_geo" in optdataset_dict[smiles][conf_i]:
                             hessian_list.extend([optdataset_dict[smiles][conf_i]["hessian"]])
@@ -662,7 +695,7 @@ def generate_systemmanager(
                 #add_basin_features(qgraph, qtaimdataset_dict[smiles][conf_i]['dens_yt'])
                 #sys.add_nxmol(qgraph)
 
-        if weight_torsion:
+        if use_torsion:
             if smiles in torsiondataset_dict:
                 weight = len(torsiondataset_dict[smiles])
                 for conf_i in torsiondataset_dict[smiles]:
@@ -671,15 +704,18 @@ def generate_systemmanager(
                     for dih_i in torsiondataset_dict[smiles][conf_i]:
                         if "final_geo" in torsiondataset_dict[smiles][conf_i][dih_i]:
                             if "final_ene" in torsiondataset_dict[smiles][conf_i][dih_i]:
-                                torsion_geo_list.extend(torsiondataset_dict[smiles][conf_i][dih_i]["final_geo"])
-                                torsion_ene_list.extend(torsiondataset_dict[smiles][conf_i][dih_i]["final_ene"])
+                                torsion_geo_list.extend(
+                                    torsiondataset_dict[smiles][conf_i][dih_i]["final_geo"]
+                                    )
+                                torsion_ene_list.extend(
+                                    torsiondataset_dict[smiles][conf_i][dih_i]["final_ene"]
+                                        )
 
-                    target_dict_torsion = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in off_geo_list],
-                                            "energies"     : [TO_ENE_UNIT(_e) for _e in ene_list],
+                    target_dict_torsion = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in torsion_geo_list],
+                                            "energies"     : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
                                             "rdmol"        : sys_target.rdmol,
                                             "minimize"     : False,
-                                            "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale, 
-                                            "weight"       : float(weight_torsion),
+                                            "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale_torsion, 
                                             "ene_weighting": ene_weighting,
                                         }
                     if torsion_geo_list:
@@ -687,50 +723,47 @@ def generate_systemmanager(
                             sys.add_target(EnergyTarget, target_dict_torsion)
                             N_data_points += len(torsion_geo_list)
 
-        if weight_geo:
+        if use_geo:
             if len(final_geo_list) > 0:
                 target_dict_geo = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
                                     "rdmol"        : sys_target.rdmol,
                                     "minimize"     : True,
                                     "H_constraint" : False,
-                                    "denom_bond"   : 5.0e-3 * _LENGTH * error_scale,
-                                    "denom_angle"  : 8.0e-0 * _ANGLE * error_scale,
-                                    "denom_torsion" : 2.0e+1 * _ANGLE * error_scale,
-                                    "weight"       : float(weight_geo),
+                                    "denom_bond"   : 5.0e-3 * _LENGTH * error_scale_geo,
+                                    "denom_angle"  : 8.0e-0 * _ANGLE * error_scale_geo,
+                                    "denom_torsion" : 2.0e+1 * _ANGLE * error_scale_geo,
                                   }
                 if target_dict_geo["structures"]:
                     sys.add_target(GeoTarget, target_dict_geo)
                     N_data_points += len(final_geo_list) * (sys.N_atoms * 3. - 6.)
 
-        if weight_vib:
+        if use_vib:
             if len(final_geo_list) > 0 and len(hessian_list) > 0:
                 target_dict_nm = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
                                    "rdmol"        : sys_target.rdmol,
                                    "minimize"     : True, 
                                    "H_constraint" : False,
                                    "hessian"      : [TO_HESSIAN_UNIT(_h) for _h in hessian_list],
-                                   "denom_freq"   : 200. * _WAVENUMBER * error_scale, 
-                                   "weight"       : float(weight_vib),
+                                   "denom_freq"   : 200. * _WAVENUMBER * error_scale_vib, 
                                 }
                 if target_dict_nm["structures"]:
                     sys.add_target(NormalModeTarget, target_dict_nm)
                     N_data_points += len(final_geo_list)
 
-        if weight_offeq:
+        if use_offeq:
             if len(off_geo_list) > 0:
                 target_dict_ene = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in off_geo_list],
                                     "energies"     : [TO_ENE_UNIT(_e) for _e in ene_list],
                                     "rdmol"        : sys_target.rdmol,
                                     "minimize"     : False,
                                     "ene_weighting": ene_weighting,
-                                    "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale,
-                                    "weight"       : float(weight_offeq),
+                                    "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale_offeq,
                                 }
                 if target_dict_ene["structures"]:
                     sys.add_target(EnergyTarget, target_dict_ene)
                     N_data_points += len(off_geo_list)
 
-        if weight_force:
+        if use_force:
             if len(off_geo_list) > 0:
                 target_dict_frc = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in off_geo_list],
                                     "forces"       : [TO_FORCE_UNIT(_f) for _f in force_list],
@@ -739,9 +772,8 @@ def generate_systemmanager(
                                     "minimize"     : False,
                                     "H_constraint" : False,
                                     "ene_weighting": ene_weighting,
-                                    "denom_bond"   : 5.0e-0 * _FORCE * error_scale,
-                                    "denom_angle"  : 5.0e-1 * _FORCE * error_scale,
-                                    "weight"       : float(weight_force),
+                                    "denom_bond"   : 5.0e-0 * _FORCE * error_scale_force,
+                                    "denom_angle"  : 5.0e-1 * _FORCE * error_scale_force,
                                 }
                 if target_dict_frc["structures"]:
                     if force_projection:
