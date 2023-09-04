@@ -40,9 +40,11 @@ def draw_bitvector_from_candidate_list(
     from .bitvector_typing import bitvec_hierarchy_to_allocations
     from .optimizers import batch_likelihood_typing
 
+    bitvec_type_list = copy.deepcopy(bitvec_type_list)
+
     N_types = pvec.force_group_count
     if N_types == 1:
-        return
+        return bitvec_type_list
     
     _, bitvec_list_alloc_dict = bitsmarts_manager.prepare_bitvectors()
 
@@ -240,9 +242,11 @@ def draw_bitvector_from_bits(
     from .bitvector_typing import bitvec_hierarchy_to_allocations
     from .optimizers import batch_likelihood_typing
 
+    bitvec_type_list = copy.deepcopy(bitvec_type_list)
+
     N_types = pvec.force_group_count
     if N_types == 1:
-        return
+        return bitvec_type_list
     
     _, bitvec_list_alloc_dict = bitsmarts_manager.prepare_bitvectors()
 

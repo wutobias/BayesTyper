@@ -506,8 +506,8 @@ def minimize_FF(
             if len(_lb) == 0:
                 _lb = [[-np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
                 _ub = [[ np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-                #_lb = [[-10. * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-                #_ub = [[ 10. * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
+            #_lb = [[-4 * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
+            #_ub = [[ 4 * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
             _lb_best = _lb[0]
             for _l in _lb:
                 for val_i, val in enumerate(_l):
@@ -633,11 +633,8 @@ def minimize_FF(
             _fun, 
             x0, 
             jac = _grad, 
+            #method = "Newton-CG",
             method = "BFGS",
-            options = {
-                'gtol': 1e-6, 
-                'disp': True
-                },
             )
         #result = optimize.differential_evolution(
         #    _fun,
@@ -1458,13 +1455,11 @@ class BaseOptimizer(object):
             if len(selection_i) == 0:
                 continue
             alloc_dict, smarts_dict, on_dict, subset_dict, bitvec_dict = bsm.and_rows(
-                #max_iter = 3,
-                max_iter = 5,
+                max_iter = 3,
                 allocations = selection_i,
                 generate_smarts = False,
                 max_neighbor = 3,
-                #max_on = max_on,
-                max_on = 1.,
+                max_on = max_on,
                 duplicate_removal = False,
                 verbose = self.verbose,
                 )
@@ -1499,7 +1494,11 @@ class BaseOptimizer(object):
                 check  = allocations.count(-1) == 0
                 check *= allocations.count(type_i) > 0
                 check *= allocations.count(type_j) > 0
-
+                for a,t in enumerate(allocations):
+                    if a in selection_i:
+                        check *= t in [type_i, type_j]
+                    else:
+                        check *= not (t in [type_i, type_j])
                 bitvec_type_list.pop(type_j)
 
                 if check:
@@ -2170,11 +2169,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                     print(
                         f"Drawing types from typing posterior for mngr {mngr_idx}"
                         )
-                pvec_list, bitvec_list = self.generate_parameter_vectors([mngr_idx])
+                [pvec], [bitvec_list] = self.generate_parameter_vectors([mngr_idx])
                 bsm, bitvec_alloc_dict_list = self.generate_bitsmartsmanager(mngr_idx)
                 bitvec_list_new = draw_bitvector_from_candidate_list(
-                    pvec_list[0], 
-                    bitvec_list[0], 
+                    pvec, 
+                    bitvec_list,
                     bsm,
                     self.targetcomputer,
                     theta=1000.,
@@ -2183,18 +2182,18 @@ class ForceFieldOptimizer(BaseOptimizer):
                     max_on=0.1,
                     verbose = self.verbose
                 )
-                allocations = [-1 for _ in pvec_list[0].allocations]
+                allocations = [-1 for _ in pvec.allocations]
                 bitvec_hierarchy_to_allocations(
                     bitvec_alloc_dict_list,
                     bitvec_list_new,
                     allocations
                     )
                 if allocations.count(-1) == 0:
-                    pvec_list[0].allocations[:] = allocations
-                    pvec_list[0].apply_changes()
+                    pvec.allocations[:] = allocations
+                    pvec.apply_changes()
                     self.update_best(
                         mngr_idx,
-                        pvec_list[0],
+                        pvec,
                         bitvec_list_new
                         )
                 if self.verbose:

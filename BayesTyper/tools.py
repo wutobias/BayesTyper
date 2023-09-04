@@ -54,6 +54,43 @@ get_atomic_weight = Chem.GetPeriodicTable().GetAtomicWeight
 get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 
+def write_pdb(system_list, optdataset_dict):
+
+    from BayesTyper.engines import OpenmmEngine
+    from BayesTyper.constants import _LENGTH_AU
+    from openmm import app
+
+    systemlist = pvec.parameter_manager.system_list
+    N_sys      = len(systemlist)
+    for sys_idx in range(N_sys):
+        sys = systemlist[sys_idx]
+        smiles = sys.name
+        for conf_i in optdataset_dict[smiles]:
+            geo_list_qm = optdataset_dict[smiles][conf_i]["final_geo"]
+            xyz = geo_list_qm*_LENGTH_AU
+            engine = OpenmmEngine(
+                sys.openmm_system, 
+                sys.top, 
+                xyz
+            )
+            engine.set_xyz(xyz)
+            engine.minimize()
+            
+            with open(f"./sys-{sys_idx}-conf-{conf_i}-mm.pdb", "w") as fopen:            
+                app.PDBFile.writeFile(
+                    sys.top.to_openmm(),
+                    engine.xyz,
+                    fopen
+                )
+
+            with open(f"./sys-{sys_idx}-conf-{conf_i}-qm.pdb", "w") as fopen:            
+                app.PDBFile.writeFile(
+                    sys.top.to_openmm(),
+                    xyz,
+                    fopen
+                )
+            
+
 def get_plots(
     systemmanager,
     title_dict=dict(),
