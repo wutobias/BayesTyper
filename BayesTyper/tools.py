@@ -60,10 +60,9 @@ def write_pdb(system_list, optdataset_dict):
     from BayesTyper.constants import _LENGTH_AU
     from openmm import app
 
-    systemlist = pvec.parameter_manager.system_list
-    N_sys      = len(systemlist)
+    N_sys = len(system_list)
     for sys_idx in range(N_sys):
-        sys = systemlist[sys_idx]
+        sys = system_list[sys_idx]
         smiles = sys.name
         for conf_i in optdataset_dict[smiles]:
             geo_list_qm = optdataset_dict[smiles][conf_i]["final_geo"]

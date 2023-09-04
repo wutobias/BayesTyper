@@ -961,9 +961,6 @@ class EnergyTarget(Target):
         self.target_denom = list()
         if self.ene_weighting:
             for strc_idx in range(self.N_strcs):
-                if strc_idx == self.min_ene_arg:
-                    self.target_denom.append(0.)
-                    continue
                 target_energy = self.target_energies[strc_idx]
                 target_energy = target_energy.value_in_unit(unit.kilocalorie_per_mole)
 
