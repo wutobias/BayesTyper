@@ -191,6 +191,7 @@ def get_plots(
         _axs = np.delete(axs, tobe_deleted)
         axs = _axs
 
+    N_plots_fig = N_plots
     N_plots = 0
     for sys_idx in range(N_sys):
         sys = systemlist[sys_idx]
@@ -221,6 +222,8 @@ def get_plots(
                 freqs_qm_list.extend(freqs_qm._value)
 
         if big_plot:
+            if len(freqs_mm_list) == 0:
+                continue
             axs[N_plots].scatter(
                 freqs_mm_list,
                 freqs_qm_list,
@@ -288,8 +291,14 @@ def get_plots(
             min_arg     = np.argmin(qm_ene_list)
             qm_ene_list = qm_ene_list - qm_ene_list[min_arg]
             mm_ene_list = mm_ene_list - mm_ene_list[min_arg]
+            ### Less then 5 kcal/mol
+            valids      = np.where(qm_ene_list < 20.92)
+            qm_ene_list = qm_ene_list[valids]
+            mm_ene_list = mm_ene_list[valids]
 
         if big_plot:
+            if len(mm_ene_list) == 0:
+                continue
             axs[N_plots].scatter(
                 mm_ene_list,
                 qm_ene_list,
@@ -432,6 +441,9 @@ def get_plots(
                         plt.show()
                         
     if big_plot:
+        diff_N_plots = N_plots_fig - N_plots
+        for i in range(1,diff_N_plots+1):
+            fig.delaxes(axs[-i])
         return fig, axs
     else:
         return
