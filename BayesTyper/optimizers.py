@@ -968,8 +968,6 @@ class BaseOptimizer(object):
         name="BaseOptimizer",
         verbose=False):
 
-        from .targets import TargetComputer
-
         self._max_neighbor = 3
 
         self.bounds_list = list()
@@ -994,15 +992,6 @@ class BaseOptimizer(object):
         self.system_list = system_list
         self._N_systems  = len(system_list)
 
-        self.targetcomputer_id = ray.put(
-            TargetComputer(
-                self.system_list
-            )
-            )
-        self.targetcomputer = ray.get(
-            self.targetcomputer_id
-            )
-
         self.grad_diff = 1.e-2
 
         ### Note, don't make this too small.
@@ -1015,6 +1004,21 @@ class BaseOptimizer(object):
         self.parm_mngr_cache_dict = dict()
         self.bsm_cache_dict  = dict()
 
+        self._initialize_targetcomputer()
+
+
+    def _initialize_targetcomputer(self):
+
+        from .targets import TargetComputer
+
+        self.targetcomputer_id = ray.put(
+            TargetComputer(
+                self.system_list
+            )
+            )
+        self.targetcomputer = ray.get(
+            self.targetcomputer_id
+            )
 
     def add_parameters(
         self,
