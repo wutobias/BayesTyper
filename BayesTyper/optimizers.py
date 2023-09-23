@@ -97,7 +97,11 @@ def batch_likelihood_typing(
             logP_likelihood += logL_list[worker_id_dict[idx]]
         else:
             for worker_id in worker_id_dict[idx]:
-                _logP_likelihood = ray.get(worker_id)
+                try:
+                    _logP_likelihood = ray.get(worker_id)
+                except:
+                    logP_likelihood = -np.inf
+                    break
                 logP_likelihood += _logP_likelihood
         logL_list[idx] = logP_likelihood
 
@@ -849,7 +853,10 @@ def set_parameters_remote(
         type_j = type_[1]
 
         worker_id = worker_id_dict[ast]
-        _, _pvec_list, bitvec_type_all_list = ray.get(worker_id)
+        try:
+            _, _pvec_list, bitvec_type_all_list = ray.get(worker_id)
+        except:
+            continue
 
         ### `full_reset=True` means we will set all parameter
         ### managers to their optimized values
@@ -995,7 +1002,6 @@ class BaseOptimizer(object):
         self.grad_diff = 1.e-2
 
         ### Note, don't make this too small.
-        ### Too small perturbations will lead to
         ### not finding the correct splits
         self.perturbation = 1.e-1
 
@@ -1208,6 +1214,8 @@ class BaseOptimizer(object):
         system_idx_list = list(),
         as_dict = False,
         ):
+        
+        import numpy as np
 
         if len(system_idx_list) == 0:
             _system_idx_list = list(range(self.N_systems))
@@ -1239,7 +1247,10 @@ class BaseOptimizer(object):
         while worker_id_list:
             worker_id, worker_id_list = ray.wait(worker_id_list)
             worker_id = worker_id[0]
-            _logP_likelihood = ray.get(worker_id)
+            try:
+                _logP_likelihood = ray.get(worker_id)
+            except:
+                _logP_likelihood = -np.inf
             sys_idx = worker_id_dict[worker_id]
             if as_dict:
                 logP_likelihood[sys_idx] = _logP_likelihood
@@ -1774,11 +1785,14 @@ class ForceFieldOptimizer(BaseOptimizer):
         alloc_bitvec_dict = dict()
         for worker_id in worker_list:
             
-            grad_score_dict, \
-            grad_norm_dict, \
-            allocation_list_dict, \
-            selection_list_dict, \
-            type_list_dict = ray.get(worker_id)
+            try:
+                grad_score_dict, \
+                grad_norm_dict, \
+                allocation_list_dict, \
+                selection_list_dict, \
+                type_list_dict = ray.get(worker_id)
+            except:
+                continue
 
             score_dict = dict()
             N_trials = 0
@@ -2087,7 +2101,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                             print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
 
                         worker_id = selection_worker_id_dict[sys_idx_pair]
-                        _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(worker_id)
+                        try:
+                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(worker_id)
+                        except:
+                            continue
                         found_improvement_mngr = new_AIC < best_AIC
 
                         if self.verbose:
