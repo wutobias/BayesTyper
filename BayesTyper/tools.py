@@ -100,6 +100,10 @@ def get_plots(
     verbose=False,
     optdataset_dict_path=None, 
     torsiondataset_dict_path=None,
+    skip_torsion=False,
+    skip_optgeo=False,
+    skip_vib=False,
+    skip_offeq=False,
 ):
 
     import pickle
@@ -159,11 +163,13 @@ def get_plots(
         for sys_idx in range(N_sys):
             sys = systemlist[sys_idx]
             smiles = sys.name
-            ### Freq.
-            N_plots += 1
-            ### Off-Equ.
-            N_plots += 1
-            if smiles in torsiondataset_dict:
+            if not skip_vib:
+                ### Freq.
+                N_plots += 1
+            if not skip_offeq:
+                ### Off-Equ.
+                N_plots += 1
+            if not skip_torsion and smiles in torsiondataset_dict:
                 for conf_i in torsiondataset_dict[smiles]:
                     for dih_i in torsiondataset_dict[smiles][conf_i]:
                         ### Torsion
@@ -205,7 +211,7 @@ def get_plots(
 
         freqs_mm_list = list()
         freqs_qm_list = list()
-        if smiles in optdataset_dict:
+        if not skip_vib and smiles in optdataset_dict:
             for conf_i in optdataset_dict[smiles]:
                 if not "hessian" in optdataset_dict[smiles][conf_i]:
                     continue
@@ -266,7 +272,7 @@ def get_plots(
 
         mm_ene_list = list()
         qm_ene_list = list()
-        if smiles in optdataset_dict:
+        if not skip_offeq and smiles in optdataset_dict:
             for conf_i in optdataset_dict[smiles]:
                 if not "ene_list" in optdataset_dict[smiles][conf_i]:
                     continue
@@ -340,7 +346,7 @@ def get_plots(
                 )
             plt.show()
 
-        if smiles in torsiondataset_dict:
+        if not skip_torsion and smiles in torsiondataset_dict:
             for conf_i in torsiondataset_dict[smiles]:
                 for dih_i in torsiondataset_dict[smiles][conf_i]:
                     if not "final_geo" in torsiondataset_dict[smiles][conf_i][dih_i]:
