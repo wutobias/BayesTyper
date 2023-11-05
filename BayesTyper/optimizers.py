@@ -3,7 +3,6 @@ from scipy import stats
 import copy
 
 from .kernels import LogJumpKernel
-from .kernels import compute_gradient_per_forcegroup
 from .vectors import ForceFieldParameterVector
 from .vectors import SmartsForceFieldParameterVector
 from .likelihoods import LogGaussianLikelihood
@@ -20,8 +19,11 @@ from .constants import (_LENGTH,
                         _FORCE_CONSTANT_ANGLE,
                         _FORCE_CONSTANT_TORSION,
                         _FORCE,
-                        _INACTIVE_GROUP_IDX
+                        _INACTIVE_GROUP_IDX,
+                        _TIMEOUT,
+                        _VERBOSE
                         )
+from .ray_tools import retrieve_failed_workers
 
 import ray
 
@@ -61,7 +63,6 @@ def batch_likelihood_typing(
         pvec_cp = pvec
 
     N_queries = len(typing_list)
-    logL_list = np.zeros(N_queries, dtype=float)
 
     openmm_system_list = list()
     for sys in pvec_cp.parameter_manager.system_list:
@@ -72,38 +73,66 @@ def batch_likelihood_typing(
     init_alloc = copy.deepcopy(pvec_cp.allocations[:])
     worker_id_dict = dict()
     cache_dict = dict()
+    cached_idxs = list()
     for idx in range(N_queries):
         typing = list(typing_list[idx])
         typing_tuple = tuple(typing)
         if typing_tuple in cache_dict:
-            worker_id_dict[idx] = cache_dict[typing_tuple]
+            cached_idxs.append(idx)
         else:
             cache_dict[typing_tuple] = idx
-            worker_id_dict[idx] = list()
             pvec_cp.allocations[:] = typing[:]
             pvec_cp.apply_changes()
-            for ommdict in openmm_system_list:
-                worker_id_dict[idx].append(
-                    targetcomputer(
-                        copy.deepcopy(ommdict), 
-                        False
-                        )
+            for ommdict_idx, ommdict in enumerate(openmm_system_list):
+                worker_id = targetcomputer(
+                    copy.deepcopy(ommdict), 
+                    False
                     )
-    for idx in range(N_queries):
+                worker_id_dict[worker_id] = (idx, ommdict_idx)
+    
+    logL_list = np.zeros(N_queries, dtype=float)
+    worker_id_list = list(worker_id_dict.keys())
+    while worker_id_list:
+        worker_id, worker_id_list = ray.wait(
+            worker_id_list, timeout=_TIMEOUT)
+        failed = len(worker_id) == 0
+        if not failed:
+            try:
+                _logP_likelihood = ray.get(
+                    worker_id[0],
+                    timeout=_TIMEOUT)
+            except:
+                failed = True
+            if not failed:
+                idx, ommdict_idx = worker_id_dict[worker_id[0]]
+                logL_list[idx]  += _logP_likelihood
+                del worker_id_dict[worker_id[0]]
+        if failed:
+            if len(worker_id) > 0:
+                if worker_id[0] not in worker_id_list:
+                    worker_id_list.append(worker_id[0])
+            resubmit_list = retrieve_failed_workers(worker_id_list)
+            for worker_id in resubmit_list:
+                ray.cancel(worker_id, force=True)
+                idx, ommdict_idx = worker_id_dict[worker_id]
+                del worker_id_dict[worker_id]
+                typing = list(typing_list[idx])
+                typing_tuple = tuple(typing)
+                pvec_cp.allocations[:] = typing[:]
+                pvec_cp.apply_changes()
+                ommdict = openmm_system_list[ommdict_idx]
+                worker_id = targetcomputer(
+                    copy.deepcopy(ommdict), 
+                    False
+                    )
+                worker_id_dict[worker_id] = (idx, ommdict_idx)
+            worker_id_list = list(worker_id_dict.keys())
+
+    for idx in cached_idxs:
         typing = list(typing_list[idx])
         typing_tuple = tuple(typing)
-        logP_likelihood = 0.
-        if isinstance(worker_id_dict[idx], int):
-            logP_likelihood += logL_list[worker_id_dict[idx]]
-        else:
-            for worker_id in worker_id_dict[idx]:
-                try:
-                    _logP_likelihood = ray.get(worker_id)
-                except:
-                    logP_likelihood = -np.inf
-                    break
-                logP_likelihood += _logP_likelihood
-        logL_list[idx] = logP_likelihood
+        idx_cache = cache_dict[typing_tuple]
+        logL_list[idx] = logL_list[idx_cache]
 
     if not rebuild_from_systems:
         pvec_cp.allocations[:] = init_alloc
@@ -153,144 +182,6 @@ def ungroup_forces(parameter_manager, perturbation=None):
     ### with j>i will be re-assigned to j-1
     for _ in range(N_force_objects):
         parameter_manager.remove_force_group(0)
-
-
-class AngleBounds(object):
-
-    def __init__(self, parameter_name_list=list()):
-
-        from rdkit import Chem
-        from openmm import unit
-
-        self.hybridization_type_dict_eq = {
-            Chem.HybridizationType.SP3 : 109.5 * unit.degree,
-            Chem.HybridizationType.SP2 : 120.0 * unit.degree,
-            Chem.HybridizationType.SP  : 180.0 * unit.degree,
-        }
-
-        self.hybridization_type_dict_min = {
-            Chem.HybridizationType.SP3 : (109.5 - 15.) * unit.degree,
-            Chem.HybridizationType.SP2 : (120.0 - 15.) * unit.degree,
-            Chem.HybridizationType.SP  : (180.0 - 15.) * unit.degree,
-        }
-
-        self.hybridization_type_dict_max = {
-            Chem.HybridizationType.SP3 : (109.5 + 15.) * unit.degree,
-            Chem.HybridizationType.SP2 : (120.0 + 15.) * unit.degree,
-            Chem.HybridizationType.SP  : (180.0 + 0.) * unit.degree,
-        }
-
-        from .constants import _ENERGY_PER_MOL, _ANGLE_RAD, _ANGLE_DEG
-        lower_k = 0.01 * _ENERGY_PER_MOL * _ANGLE_DEG**-2
-        upper_k = 0.50 * _ENERGY_PER_MOL * _ANGLE_DEG**-2
-
-        self.lower = [lower_k.in_units_of(_FORCE_CONSTANT_ANGLE),  90. * unit.degree]
-        self.upper = [upper_k.in_units_of(_FORCE_CONSTANT_ANGLE), 180. * unit.degree]
-
-        self.parameter_name_list = parameter_name_list
-
-    def get_bounds(self, atom_list, rdmol):
-
-        import copy
-        from openmm import unit
-
-        atom_idx = atom_list[1]
-
-        if 'k' in self.parameter_name_list:
-            lower = [self.lower[0]]
-            upper = [self.upper[0]]
-        elif 'angle' in self.parameter_name_list:
-            lower = [self.lower[1]]
-            upper = [self.upper[1]]
-
-            atom = rdmol.GetAtomWithIdx(atom_idx)
-            hyb  = atom.GetHybridization()
-            if hyb in self.hybridization_type_dict_min: 
-                min_angle = self.hybridization_type_dict_min[hyb]
-            if hyb in self.hybridization_type_dict_max: 
-                max_angle = self.hybridization_type_dict_max[hyb]
-
-            lower[0] = min_angle
-            upper[0] = max_angle
-        else:
-            lower = self.lower
-            upper = self.upper
-
-            atom = rdmol.GetAtomWithIdx(atom_idx)
-            hyb  = atom.GetHybridization()
-            if hyb in self.hybridization_type_dict_min: 
-                min_angle = self.hybridization_type_dict_min[hyb]
-            if hyb in self.hybridization_type_dict_max: 
-                max_angle = self.hybridization_type_dict_max[hyb]
-
-            lower[1] = min_angle
-            upper[1] = max_angle
-
-        return lower, upper
-
-
-class BondBounds(object):
-
-    def __init__(self, parameter_name_list=list()):
-
-        from openmm import unit
-
-        if 'k' in parameter_name_list:
-            self.lower = [100000. * _FORCE_CONSTANT_BOND]
-            self.upper = [600000. * _FORCE_CONSTANT_BOND]
-        elif 'length' in parameter_name_list:
-            self.lower = [0.05 * unit.nanometer]
-            self.upper = [0.20 * unit.nanometer]            
-        else:
-            self.lower = [100000. * _FORCE_CONSTANT_BOND, 0.05 * unit.nanometer]
-            self.upper = [600000. * _FORCE_CONSTANT_BOND, 0.20 * unit.nanometer]
-
-    def get_bounds(self, atom_list, rdmol):
-
-        import copy
-
-        lower = copy.deepcopy(self.lower)
-        upper = copy.deepcopy(self.upper)
-        
-        return lower, upper
-
-
-class TorsionBounds(object):
-
-    def __init__(self, parameter_name_list=list()):
-
-        self._lower = [-0.0 * _FORCE_CONSTANT_TORSION]
-        self._upper = [+0.0 * _FORCE_CONSTANT_TORSION]
-
-    def get_bounds(self, atom_list, rdmol):
-
-        return self._lower, self._upper
-
-
-class DoubleTorsionBounds(object):
-
-    def __init__(self, parameter_name_list=list()):
-
-        self._lower = [-0.0 * _FORCE_CONSTANT_TORSION, -0.0 * _FORCE_CONSTANT_TORSION]
-        self._upper = [+0.0 * _FORCE_CONSTANT_TORSION, +0.0 * _FORCE_CONSTANT_TORSION]
-
-    def get_bounds(self, atom_list, rdmol):
-
-        return self._lower, self._upper
-
-
-class MultiTorsionBounds(object):
-
-    def __init__(self, parameter_name_list=list()):
-
-        N_parms = len(parameter_name_list)
-
-        self._lower = [-0.0 * _FORCE_CONSTANT_TORSION for _ in range(N_parms)]
-        self._upper = [+0.0 * _FORCE_CONSTANT_TORSION for _ in range(N_parms)]
-
-    def get_bounds(self, atom_list, rdmol):
-
-        return self._lower, self._upper
 
 
 @ray.remote
@@ -422,7 +313,7 @@ def minimize_FF(
     use_scipy=False,
     verbose=False,
     get_timing=False):
-
+    
     if get_timing:
         import time
         time_start = time.time()
@@ -435,8 +326,6 @@ def minimize_FF(
     system_list_cp = copy.deepcopy(system_list)
 
     pvec_min_list  = list()
-    lb_bounds_list = list()
-    ub_bounds_list = list()
     N_parms_all    = 0
     if pvec_idx_min == None:
         pvec_idx_list = range(len(pvec_list_cp))
@@ -449,7 +338,7 @@ def minimize_FF(
     for pvec in pvec_list_cp:
         N_parms_all += pvec.size
 
-    excluded_parameter_idx_list = []
+    excluded_parameter_idx_list = list()
     for pvec_idx in pvec_idx_list:
 
         pvec = pvec_list_cp[pvec_idx]
@@ -480,97 +369,24 @@ def minimize_FF(
             )
         pvec.apply_changes()
 
-        lb = list()
-        ub = list()
         bounds = bounds_list[pvec_idx]
-        for i in range(pvec.force_group_count):
-            valid_ranks = list()
-            atom_list_list = np.array(pvec.parameter_manager.atom_list)
-            for s in pvec.allocations.index([i])[0]:
-                valid_ranks.extend(
-                    np.where(s == pvec.parameter_manager.force_ranks)[0].tolist()
-                    )
-            sys_idx_list = pvec.parameter_manager.system_idx_list[valid_ranks]
-            atom_list_list = atom_list_list[valid_ranks].tolist()
-            assert len(sys_idx_list) == len(atom_list_list)
-            _lb = list()
-            _ub = list()
-            for sys_idx, atom_list in zip(sys_idx_list, atom_list_list):
-                rdmol = system_list[sys_idx].rdmol
-                if bounds == None:
-                    minval_list = [-np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]
-                    maxval_list = [ np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]
-                else:
-                    minval_list, maxval_list = bounds.get_bounds(
-                        atom_list, 
-                        rdmol
-                        )
-                _lb.append(minval_list)
-                _ub.append(maxval_list)
-            if len(_lb) == 0:
-                _lb = [[-np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-                _ub = [[ np.inf * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-            #_lb = [[-4 * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-            #_ub = [[ 4 * pvec.vector_units[i] for i in range(pvec.parameters_per_force_group)]]
-            _lb_best = _lb[0]
-            for _l in _lb:
-                for val_i, val in enumerate(_l):
-                    if val < _lb_best[val_i]:
-                        _lb_best[val_i] = val
-            _ub_best = _ub[0]
-            for _u in _ub:
-                for val_i, val in enumerate(_u):
-                    if val > _ub_best[val_i]:
-                        _ub_best[val_i] = val
-
-            lb.extend(_lb_best)
-            ub.extend(_ub_best)
-        lb = np.array(lb)
-        ub = np.array(ub)
-        lb = np.array(
-            pvec.get_transform(lb)
-            )
-        ub = np.array(
-            pvec.get_transform(ub)
-            )
-
-        lb_bounds_list.extend(lb.tolist())
-        ub_bounds_list.extend(ub.tolist())
-
-    lb_bounds_list = np.array(lb_bounds_list).flatten()
-    ub_bounds_list = np.array(ub_bounds_list).flatten()
-    all_bounds_list = np.vstack((lb_bounds_list, ub_bounds_list))
+        if not isinstance(bounds, type(None)):
+            bounds.apply_pvec(pvec)
 
     likelihood_func = LikelihoodVectorized(
         pvec_min_list,
         targetcomputer,
         )
 
-    x0 = copy.deepcopy(likelihood_func.pvec)
-    x0_ref = copy.deepcopy(likelihood_func.pvec)
+    x0 = copy.deepcopy(likelihood_func.pvec[:])
+    x0_ref = copy.deepcopy(likelihood_func.pvec[:])
 
     def penalty(x):
 
-        lower_diff = np.zeros_like(x)
-        upper_diff = np.zeros_like(x)
-
-        valids_lb = np.less(x, lb_bounds_list) # x < lb_bounds_list
-        valids_ub = np.greater(x, ub_bounds_list) # x > ub_bounds_list
-        if valids_lb.size > 0:
-            lower_diff[valids_lb] = x[valids_lb] - lb_bounds_list[valids_lb]
-        if valids_ub.size > 0:
-            upper_diff[valids_ub] = x[valids_ub] - ub_bounds_list[valids_ub]
-
-        ### Make sure we only use values from relevant
-        ### force groups.
+        penalty_val = np.sum(x**2)
         if excluded_parameter_idx_list:
-            lower_diff[excluded_parameter_idx_list] = 0.
-            upper_diff[excluded_parameter_idx_list] = 0.
-
-        penalty_val  = 0.
-        penalty_val += bounds_penalty * np.sum(lower_diff**2)
-        penalty_val += bounds_penalty * np.sum(upper_diff**2)
-
+            penalty_val -= np.sum(x[excluded_parameter_idx_list]**2)
+        penalty_val *= bounds_penalty
         return penalty_val
 
     def fun(x):
@@ -587,16 +403,7 @@ def minimize_FF(
 
     def grad_penalty(x):
 
-        grad = np.zeros_like(x)
-
-        valids_lb = np.less(x, lb_bounds_list) # x < lb_bounds_list
-        valids_ub = np.greater(x, ub_bounds_list) # x > ub_bounds_list
-        if valids_lb.size > 0:
-            lower_diff = x[valids_lb] - lb_bounds_list[valids_lb]
-            grad[valids_lb] += bounds_penalty * 2. * lower_diff
-        if valids_ub.size > 0:
-            upper_diff = x[valids_ub] - ub_bounds_list[valids_ub]
-            grad[valids_ub] += bounds_penalty * 2. * upper_diff
+        grad = bounds_penalty * 2. * x
 
         ### Make sure we only use values from relevant
         ### force groups.
@@ -640,10 +447,12 @@ def minimize_FF(
             #method = "Newton-CG",
             method = "BFGS",
             )
-        #result = optimize.differential_evolution(
+        #from scipy.optimize import differential_evolution
+        #result = differential_evolution(
         #    _fun,
-        #    [(lb-10.,ub+10.) for lb, ub in zip(lb_bounds_list, ub_bounds_list)]
+        #    [(-10,10) for _ in x0]
         #    )
+        
         best_x = result.x
         likelihood_func.apply_changes(best_x)
         best_f  = _fun(best_x)
@@ -808,7 +617,8 @@ def set_parameters_remote(
     def _calculate_AIC(
         _pvec_list,
         _mngr_idx,
-        _typing_list):
+        _typing_list,
+        targetcomputer):
 
         logL_list = batch_likelihood_typing(
             _pvec_list[_mngr_idx],
@@ -830,7 +640,8 @@ def set_parameters_remote(
     [best_AIC] = _calculate_AIC(
         pvec_list_cp,
         0,
-        [pvec_list_cp[0].allocations[:].tolist()]
+        [pvec_list_cp[0].allocations[:].tolist()],
+        targetcomputer
         )
 
     if verbose:
@@ -846,114 +657,158 @@ def set_parameters_remote(
     found_improvement = False
 
     ### For each system, find the best solution
-    for ast in worker_id_dict:
-        _, _, type_ = ast
+    worker_id_list = list(worker_id_dict.keys())
+    while worker_id_list:
 
-        type_i = type_[0]
-        type_j = type_[1]
+        worker_id, worker_id_list = ray.wait(
+            worker_id_list, timeout=_TIMEOUT)
+        failed = len(worker_id) == 0
+        if not failed:
+            try:
+                _, _pvec_list, bitvec_type_all_list = ray.get(
+                    worker_id[0], timeout=_TIMEOUT)
+            except:
+                failed = True
+            if not failed:
+            
+                args = worker_id_dict[worker_id[0]]
+                ast, _, _, _, _, _, _, _, _, _ = args
+                _, _, type_ = ast
 
-        worker_id = worker_id_dict[ast]
-        try:
-            _, _pvec_list, bitvec_type_all_list = ray.get(worker_id)
-        except:
-            continue
+                type_i = type_[0]
+                type_j = type_[1]
 
-        ### `full_reset=True` means we will set all parameter
-        ### managers to their optimized values
-        ### `full_reset=False` means we will set only the main
-        ### parameter manager to its optimized values and all other
-        ### are set to the best value.
-        for full_reset in [True, False]:
-            for mngr_idx in range(N_mngr):
-                ### For the targeted mngr we just set the
-                ### parameter values to the optimized ones.
-                ### The allocations will be set in the next step
-                if mngr_idx == mngr_idx_main:
-                    allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
-                    pvec_list_cp[mngr_idx].allocations[:] = allocations
-                    pvec_list_cp[mngr_idx].reset(
-                        _pvec_list[mngr_idx],
-                        pvec_list_cp[mngr_idx].allocations
-                        )
-                else:
-                    ### Set all parameter values to
-                    ### their optimized values.
-                    if full_reset:
-                        allocations = [-1 for _ in pvec_list_cp[mngr_idx].allocations]
-                        bitvec_type_list_list_cp[mngr_idx] = bitvec_type_all_list[mngr_idx]
-                        bitvec_hierarchy_to_allocations(
-                            bitvec_alloc_dict_list[mngr_idx], 
-                            bitvec_type_all_list[mngr_idx],
-                            allocations
-                            )
-                        if allocations.count(-1) == 0:
+                ### `full_reset=True` means we will set all parameter
+                ### managers to their optimized values
+                ### `full_reset=False` means we will set only the main
+                ### parameter manager to its optimized values and all other
+                ### are set to the best value.
+                for full_reset in [True, False]:
+                    for mngr_idx in range(N_mngr):
+                        ### For the targeted mngr we just set the
+                        ### parameter values to the optimized ones.
+                        ### The allocations will be set in the next step
+                        if mngr_idx == mngr_idx_main:
+                            allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
                             pvec_list_cp[mngr_idx].allocations[:] = allocations
                             pvec_list_cp[mngr_idx].reset(
                                 _pvec_list[mngr_idx],
                                 pvec_list_cp[mngr_idx].allocations
                                 )
-                    ### Set the parameter values to
-                    ### their optimized values only for the 
-                    ### targeted mngr and keep the previous
-                    ### values for the other managers.
-                    else:
-                        bitvec_type_list_list_cp[mngr_idx] = bitvec_type_list_list[mngr_idx]
-                        pvec_list_cp[mngr_idx].reset(
-                            pvec_list[mngr_idx],
-                            pvec_list[mngr_idx].allocations
+                        else:
+                            ### Set all parameter values to
+                            ### their optimized values.
+                            if full_reset:
+                                allocations = [-1 for _ in pvec_list_cp[mngr_idx].allocations]
+                                bitvec_type_list_list_cp[mngr_idx] = bitvec_type_all_list[mngr_idx]
+                                bitvec_hierarchy_to_allocations(
+                                    bitvec_alloc_dict_list[mngr_idx], 
+                                    bitvec_type_all_list[mngr_idx],
+                                    allocations
+                                    )
+                                if allocations.count(-1) == 0:
+                                    pvec_list_cp[mngr_idx].allocations[:] = allocations
+                                    pvec_list_cp[mngr_idx].reset(
+                                        _pvec_list[mngr_idx],
+                                        pvec_list_cp[mngr_idx].allocations
+                                        )
+                            ### Set the parameter values to
+                            ### their optimized values only for the 
+                            ### targeted mngr and keep the previous
+                            ### values for the other managers.
+                            else:
+                                bitvec_type_list_list_cp[mngr_idx] = bitvec_type_list_list[mngr_idx]
+                                pvec_list_cp[mngr_idx].reset(
+                                    pvec_list[mngr_idx],
+                                    pvec_list[mngr_idx].allocations
+                                    )
+                        pvec_list_cp[mngr_idx].apply_changes()
+
+                    bitvec_list = list()
+                    alloc_list  = list()
+                    for b in bitvec_dict[ast]:
+                        bitvec_type_list_list_cp[mngr_idx_main].insert(
+                            type_j, b
                             )
-                pvec_list_cp[mngr_idx].apply_changes()
 
-            bitvec_list = list()
-            alloc_list  = list()
-            for b in bitvec_dict[ast]:
-                bitvec_type_list_list_cp[mngr_idx_main].insert(
-                    type_j, b
-                    )
-
-                allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
-                bitvec_hierarchy_to_allocations(
-                    bitvec_alloc_dict_list[mngr_idx_main], 
-                    bitvec_type_list_list_cp[mngr_idx_main],
-                    allocations
-                    )
-                if allocations.count(-1) == 0:
-                    allocs = tuple(allocations)
-                    if allocs not in alloc_list:
-                        alloc_list.append(
-                            allocs
+                        allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
+                        bitvec_hierarchy_to_allocations(
+                            bitvec_alloc_dict_list[mngr_idx_main], 
+                            bitvec_type_list_list_cp[mngr_idx_main],
+                            allocations
                             )
-                        bitvec_list.append(b)
-                bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
+                        if allocations.count(-1) == 0:
+                            allocs = tuple(allocations)
+                            if allocs not in alloc_list:
+                                alloc_list.append(
+                                    allocs
+                                    )
+                                bitvec_list.append(b)
+                        bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
 
-            AIC_list = _calculate_AIC(
-                pvec_list_cp,
-                mngr_idx_main,
-                alloc_list,
-                )
-            for idx, b in enumerate(bitvec_list):
-                new_AIC = AIC_list[idx]
-                accept = False
-                if new_AIC < best_AIC:
-                    accept = True
-                if accept:
-                    pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
-                    pvec_list_cp[mngr_idx_main].apply_changes()
-                    best_AIC       = new_AIC
-                    best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
-                    best_ast       = ast
-                    
-                    best_bitvec_type_list_list = copy.deepcopy(bitvec_type_list_list_cp)
-                    best_bitvec_type_list_list[mngr_idx_main].insert(
-                        type_j, b)
-                    found_improvement = True
+                    AIC_list = _calculate_AIC(
+                        pvec_list_cp,
+                        mngr_idx_main,
+                        alloc_list,
+                        targetcomputer
+                        )
+                    for idx, b in enumerate(bitvec_list):
+                        new_AIC = AIC_list[idx]
+                        accept = False
+                        if new_AIC < best_AIC:
+                            accept = True
+                        if accept:
+                            pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
+                            pvec_list_cp[mngr_idx_main].apply_changes()
+                            best_AIC       = new_AIC
+                            best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
+                            best_ast       = ast
+                            
+                            best_bitvec_type_list_list = copy.deepcopy(bitvec_type_list_list_cp)
+                            best_bitvec_type_list_list[mngr_idx_main].insert(
+                                type_j, b)
+                            found_improvement = True
 
-        for mngr_idx in range(N_mngr):
-            pvec_list_cp[mngr_idx].reset(
-                pvec_list[mngr_idx]
-                )
-            bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                bitvec_type_list_list[mngr_idx])
+                for mngr_idx in range(N_mngr):
+                    pvec_list_cp[mngr_idx].reset(
+                        pvec_list[mngr_idx]
+                        )
+                    bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
+                        bitvec_type_list_list[mngr_idx])
+            
+                del worker_id_dict[worker_id[0]]
+
+        if failed:
+            if len(worker_id) > 0:
+                if worker_id[0] not in worker_id_list:
+                    worker_id_list.append(worker_id[0])
+            resubmit_list = retrieve_failed_workers(worker_id_list)
+            for worker_id in resubmit_list:
+                args = worker_id_dict[worker_id]
+                (ast, _system_list_id, _targetcomputer_id, _pvec_all_id, _bitvec_type_list_id, _bounds_list, _parm_penalty_split, _mngr_idx_main, _bounds_penalty, _system_idx_list) = args
+                
+                try:
+                    ray.cancel(worker_id)
+                except:
+                    pass
+                del worker_id_dict[worker_id]
+                worker_id = minimize_FF.remote(
+                        system_list = _system_list_id,
+                        targetcomputer = _targetcomputer_id,
+                        pvec_list = _pvec_all_id,
+                        bitvec_type_list = _bitvec_type_list_id,
+                        bounds_list = _bounds_list,
+                        parm_penalty = _parm_penalty_split,
+                        pvec_idx_min = [_mngr_idx_main],
+                        parallel_targets = False,
+                        bounds_penalty= _bounds_penalty,
+                        use_scipy = True,
+                        verbose = verbose,
+                        )
+                worker_id_dict[worker_id] = args
+            worker_id_list = list(worker_id_dict.keys())
+            import time
+            time.sleep(_TIMEOUT)
 
     if found_improvement:
         for mngr_idx in range(N_mngr):
@@ -1021,9 +876,11 @@ class BaseOptimizer(object):
             TargetComputer(
                 self.system_list
             )
-            )
+        )
+
         self.targetcomputer = ray.get(
-            self.targetcomputer_id
+            self.targetcomputer_id,
+            timeout=_TIMEOUT
             )
 
     def add_parameters(
@@ -1205,7 +1062,6 @@ class BaseOptimizer(object):
                     pvec
                     )
 
-
         return pvec_list, bitvec_type_list
 
 
@@ -1245,17 +1101,44 @@ class BaseOptimizer(object):
             logP_likelihood = 0.
         worker_id_list = list(worker_id_dict.keys())
         while worker_id_list:
-            worker_id, worker_id_list = ray.wait(worker_id_list)
-            worker_id = worker_id[0]
-            try:
-                _logP_likelihood = ray.get(worker_id)
-            except:
-                _logP_likelihood = -np.inf
-            sys_idx = worker_id_dict[worker_id]
-            if as_dict:
-                logP_likelihood[sys_idx] = _logP_likelihood
-            else:
-                logP_likelihood += _logP_likelihood
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, timeout=_TIMEOUT)
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    _logP_likelihood = ray.get(
+                        worker_id[0], timeout=_TIMEOUT)
+                except:
+                    failed = True
+                if not failed:
+                    sys_idx = worker_id_dict[worker_id[0]]
+                    if as_dict:
+                        logP_likelihood[sys_idx] = _logP_likelihood
+                    else:
+                        logP_likelihood += _logP_likelihood
+                    del worker_id_dict[worker_id[0]]
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])                    
+                resubmit_list = retrieve_failed_workers(worker_id_list)
+                for worker_id in resubmit_list:
+                    sys_idx = worker_id_dict[worker_id]
+                    ray.cancel(worker_id, force=True)
+                    del worker_id_dict[worker_id]
+                    if isinstance(sys_idx, int):
+                        sys = self.system_list[sys_idx]
+                        sys_dict[sys.name] = [sys.openmm_system]
+                    else:
+                        for _sys_idx in sys_idx:
+                            sys = self.system_list[_sys_idx]
+                            sys_dict[sys.name] = [sys.openmm_system]
+                    worker_id = self.targetcomputer(
+                        sys_dict,
+                        False
+                        )
+                    worker_id_dict[worker_id] = sys_idx
+                worker_id_list = list(worker_id_dict.keys())
 
         return logP_likelihood
 
@@ -1408,23 +1291,19 @@ class BaseOptimizer(object):
     def get_random_system_idx_list(
         self,
         N_sys_per_batch,
+        N_batches,
         ):
 
         system_idx_list = np.arange(
             self.N_systems, 
             dtype=int
             )
-        np.random.shuffle(system_idx_list)
-        res = self.N_systems%N_sys_per_batch
-        N_batches = int((self.N_systems-res)/N_sys_per_batch)
-
-        system_idx_list_batch = system_idx_list[:(self.N_systems-res)].reshape((N_batches, N_sys_per_batch)).tolist()
-        if res > 0:
-            system_idx_list_batch.append(system_idx_list[-res:])
-
-        system_idx_list_batch = tuple(
-            [tuple(sorted(sys_idx_pair)) for sys_idx_pair in system_idx_list_batch]
-            )
+        system_idx_list_batch = tuple()
+        for _ in range(N_batches):
+            np.random.shuffle(system_idx_list)
+            sys_list = system_idx_list[:N_sys_per_batch].tolist()
+            sys_list = tuple(sorted(sys_list))
+            system_idx_list_batch += tuple([sys_list])
 
         return system_idx_list_batch
 
@@ -1452,7 +1331,8 @@ class BaseOptimizer(object):
             )
         [pvec], _ = self.generate_parameter_vectors(
             [mngr_idx],
-            system_idx_list
+            system_idx_list,
+            as_copy=False
             )
         N_types = pvec.force_group_count
         if split_all:
@@ -1460,8 +1340,17 @@ class BaseOptimizer(object):
         else:
             type_query_list = [N_types-1]
 
-        pvec_id = ray.put(pvec)
-        worker_id_list = list()
+        for _ in range(20):
+            try:
+                pvec_id = ray.put(pvec)
+                break
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                import time
+                time.sleep(2)
+        worker_id_dict = dict()
         alloc_bitvec_degeneracy_dict = dict()
         for type_i in type_query_list:
             type_j = type_i + 1
@@ -1551,9 +1440,10 @@ class BaseOptimizer(object):
                     k_values_ij = k_values_ij[split_idxs],
                     grad_diff = self.grad_diff,
                     )
-                worker_id_list.append(worker_id)
+                args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, mngr_idx, system_idx_list)
+                worker_id_dict[worker_id] = args
 
-        return worker_id_list, alloc_bitvec_degeneracy_dict
+        return worker_id_dict, alloc_bitvec_degeneracy_dict
     
 
 class ForceFieldOptimizer(BaseOptimizer):
@@ -1769,7 +1659,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
     def get_votes(
         self,
-        worker_list,
+        worker_id_dict,
         low_to_high=True,
         abs_grad_score=False,
         norm_cutoff=0.,
@@ -1778,77 +1668,107 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         import numpy as np
 
-        if len(worker_list) == 0:
+        if len(worker_id_dict) == 0:
             return list()
 
         votes_dict = dict()
         alloc_bitvec_dict = dict()
-        for worker_id in worker_list:
-            
-            try:
-                grad_score_dict, \
-                grad_norm_dict, \
-                allocation_list_dict, \
-                selection_list_dict, \
-                type_list_dict = ray.get(worker_id)
-            except:
-                continue
 
-            score_dict = dict()
-            N_trials = 0
-            for trial_idx in grad_score_dict:
+        worker_id_list = list(worker_id_dict.keys())
+        while worker_id_list:
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, timeout=_TIMEOUT)
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    result = ray.get(worker_id[0], timeout=_TIMEOUT)
+                except:
+                    failed = True
+                if not failed:
+                    grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict = result
 
-                grad_score = grad_score_dict[trial_idx]
-                grad_norm  = grad_norm_dict[trial_idx]
-                allocation_list = allocation_list_dict[trial_idx]
-                selection_list  = selection_list_dict[trial_idx]
-                type_list  = type_list_dict[trial_idx]
+                    score_dict = dict()
+                    N_trials = 0
+                    for trial_idx in grad_score_dict:
 
-                N_trials += 1
+                        grad_score = grad_score_dict[trial_idx]
+                        grad_norm  = grad_norm_dict[trial_idx]
+                        allocation_list = allocation_list_dict[trial_idx]
+                        selection_list  = selection_list_dict[trial_idx]
+                        type_list  = type_list_dict[trial_idx]
 
-                for g, n, a, s, t in zip(grad_score, grad_norm, allocation_list, selection_list, type_list):
-                    ### Only use this split, when the norm
-                    ### is larger than norm_cutoff
-                    #print(
-                    #    f"Gradient scores {g}",
-                    #    f"Gradient norms {n}",
-                    #    )
+                        N_trials += 1
 
-                    ast = a,s,t
-                    if np.all(np.abs(n) < norm_cutoff):
-                        pass
+                        for g, n, a, s, t in zip(grad_score, grad_norm, allocation_list, selection_list, type_list):
+                            ### Only use this split, when the norm
+                            ### is larger than norm_cutoff
+                            #print(
+                            #    f"Gradient scores {g}",
+                            #    f"Gradient norms {n}",
+                            #    )
+
+                            ast = a,s,t
+                            if np.all(np.abs(n) < norm_cutoff):
+                                pass
+                            else:
+                                ### Only consider the absolute value of the gradient score, not the sign
+                                if abs_grad_score:
+                                    _g = [abs(gg) for gg in g]
+                                    g  = _g
+                                if ast in score_dict:
+                                    score_dict[ast] += g
+                                else:
+                                    score_dict[ast] = g
+
+                    for ast in score_dict:
+                        score_dict[ast] /= N_trials
+
+                    ### Sort dictionaries
+                    if low_to_high:
+                        ### For split: small values favored, i.e. small values first
+                        score_list  = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
                     else:
-                        ### Only consider the absolute value of the gradient score, not the sign
-                        if abs_grad_score:
-                            _g = [abs(gg) for gg in g]
-                            g  = _g
-                        if ast in score_dict:
-                            score_dict[ast] += g
+                        ### For merge: high values favored, i.e. high values first
+                        score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=True)]
+
+                    #for ast_i, ast in enumerate(score_list):
+                    #    votes_dict[ast] = 1
+
+                    ### Gather the three best (a,s,t) combinations
+                    ### and gather votes.
+                    ### Best one gets 3 votes, second 2 votes and third 1 vote
+                    for ast_i, ast in enumerate(score_list[:3]):
+                        if ast in votes_dict:
+                            votes_dict[ast] += (3-ast_i)
                         else:
-                            score_dict[ast] = g
+                            votes_dict[ast] = (3-ast_i)
+                
+                    del worker_id_dict[worker_id[0]]
 
-            for ast in score_dict:
-                score_dict[ast] /= N_trials
-
-            ### Sort dictionaries
-            if low_to_high:
-                ### For split: small values favored, i.e. small values first
-                score_list  = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
-            else:
-                ### For merge: high values favored, i.e. high values first
-                score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=True)]
-
-            for ast_i, ast in enumerate(score_list):
-                votes_dict[ast] = 1
-
-            ### Gather the three best (a,s,t) combinations
-            ### and gather votes.
-            ### Best one gets 3 votes, second 2 votes and third 1 vote
-            #for ast_i, ast in enumerate(score_list[:3]):
-            #    if ast in votes_dict:
-            #        votes_dict[ast] += (3-ast_i)
-            #    else:
-            #        votes_dict[ast] = (3-ast_i)
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])
+                resubmit_list = retrieve_failed_workers(worker_id_list)
+                for worker_id in resubmit_list:
+                    args = worker_id_dict[worker_id]
+                    del worker_id_dict[worker_id]
+                    ray.cancel(worker_id, force=True)
+                    _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _mngr_idx, _system_idx_list = args
+                    ray.get(_pvec_id)
+                    worker_id = get_gradient_scores.remote(
+                        ff_parameter_vector = _pvec_id,
+                        targetcomputer = _targetcomputer_id,
+                        type_i = _type_i,
+                        selection_i = _selection_i,
+                        k_values_ij = _k_values_ij,
+                        grad_diff = _grad_diff,
+                        )
+                    args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _mngr_idx, _system_idx_list
+                    worker_id_dict[worker_id] = args
+                worker_id_list = list(worker_id_dict.keys())
+                import time
+                time.sleep(_TIMEOUT)
 
         ### Only keep the final best `keep_N_best` ast
         votes_list = [ast for ast, _ in sorted(votes_dict.items(), key=lambda items: items[1], reverse=True)]
@@ -1860,7 +1780,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
     def get_min_scores(
         self,
-        mngr_idx,
+        mngr_idx_main,
         system_idx_list = list(),
         votes_split_list = list(),
         parallel_targets = False,
@@ -1871,42 +1791,81 @@ class ForceFieldOptimizer(BaseOptimizer):
         if len(system_idx_list) == 0:
             system_idx_list = list(range(self.N_systems))
 
-        system_list_id = ray.put([self.system_list[sys_idx] for sys_idx in system_idx_list])
-        worker_id_dict = dict()
+        system_list = [self.system_list[sys_idx] for sys_idx in system_idx_list]
+        pvec_all, bitvec_type_list = self.generate_parameter_vectors(
+            [],
+            system_idx_list,
+            )
+        for _ in range(20):
+            try:
+                system_list_id = ray.put(system_list)
+                bitvec_type_list_id = ray.put(bitvec_type_list)
+                break
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                import time
+                time.sleep(2)
+
+        pvec_cp = pvec_all[mngr_idx_main].copy()
+        N_types = pvec_all[mngr_idx_main].force_group_count
 
         pvec_all, bitvec_type_list = self.generate_parameter_vectors(
             [],
             system_idx_list,
             )
-        pvec_cp = pvec_all[mngr_idx].copy()
-        N_types = pvec_all[mngr_idx].force_group_count
 
+        worker_id_dict = dict()
         ### Query split candidates
         ### ======================
         for counts, ast in enumerate(votes_split_list):
             allocation, selection, type_ = ast
 
-            pvec_all[mngr_idx].duplicate(type_[0])
-            pvec_all[mngr_idx].swap_types(N_types, type_[1])
-            pvec_all[mngr_idx].allocations[:] = list(allocation)
-            pvec_all[mngr_idx].apply_changes()
+            pvec_all[mngr_idx_main].duplicate(type_[0])
+            pvec_all[mngr_idx_main].swap_types(N_types, type_[1])
+            pvec_all[mngr_idx_main].allocations[:] = list(allocation)
+            pvec_all[mngr_idx_main].apply_changes()
+
+            pvec_all_cp = [pvec.copy() for pvec in pvec_all]
+            for _ in range(20):
+                try:
+                    pvec_all_id = ray.put(pvec_all_cp)
+                    break
+                except:
+                    if _VERBOSE:
+                        import traceback
+                        print(traceback.format_exc())
+                    import time
+                    time.sleep(2)
 
             worker_id = minimize_FF.remote(
                     system_list = system_list_id,
                     targetcomputer = self.targetcomputer_id,
-                    pvec_list = pvec_all,
-                    bitvec_type_list = bitvec_type_list,
+                    pvec_list = pvec_all_id,
+                    bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
-                    pvec_idx_min = [mngr_idx],
+                    pvec_idx_min = [mngr_idx_main],
                     parallel_targets = parallel_targets,
-                    bounds_penalty=self.bounds_penalty_list[mngr_idx],
+                    bounds_penalty = self.bounds_penalty_list[mngr_idx_main],
                     use_scipy = use_scipy,
                     verbose = self.verbose,
                     )
 
-            worker_id_dict[ast] = worker_id
-            pvec_all[mngr_idx].reset(pvec_cp)
+            worker_id_dict[worker_id] = (
+                ast, 
+                system_list_id, 
+                self.targetcomputer_id, 
+                pvec_all_id, 
+                bitvec_type_list_id, 
+                self.bounds_list, 
+                self.parm_penalty_split, 
+                mngr_idx_main, 
+                self.bounds_penalty_list[mngr_idx_main],
+                system_idx_list
+                )
+            pvec_all[mngr_idx_main].reset(pvec_cp)
 
         return worker_id_dict
 
@@ -1927,6 +1886,8 @@ class ForceFieldOptimizer(BaseOptimizer):
         pair_incr_split = 10,
         ### Initial number of systems per batch
         N_sys_per_batch_split = 1,
+        ### Number of batches to use per loop
+        N_batches = 1,
         ### Optimize ordering in which systems are computed
         optimize_system_ordering=True,
         ### Keep the `keep_N_best` solutions for each split
@@ -1975,7 +1936,7 @@ class ForceFieldOptimizer(BaseOptimizer):
             while split_iteration_idx < max_splitting_attempts:
                 print(f"ATTEMPTING SPLIT {iteration_idx}/{split_iteration_idx}")
                 found_improvement       = False
-                system_idx_list_batch   = self.get_random_system_idx_list(N_sys_per_batch_split)
+                system_idx_list_batch   = self.get_random_system_idx_list(N_sys_per_batch_split, N_batches)
 
                 if optimize_system_ordering:
                     if self.verbose:
@@ -1989,21 +1950,50 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                     ### Compute average compute time for each `sys_idx_pair`
                     ### over `N_trails_opt` replicates.
-                    N_trails_opt = 25
+                    N_trials_opt = 25
                     worker_id_dict = dict()
-                    for sys_idx_pair in system_idx_list_batch:
-                        worker_id_dict[sys_idx_pair] = list()
-                        pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
-                        pvec = pvec_list[0]
-                        for _ in range(N_trails_opt):
-                            worker_id = _test_logL.remote(pvec, self.targetcomputer_id)
-                            worker_id_dict[sys_idx_pair].append(worker_id)
-
                     time_diff_dict = dict()
                     for sys_idx_pair in system_idx_list_batch:
                         time_diff_dict[sys_idx_pair] = 0.
-                        results = ray.get(worker_id_dict[sys_idx_pair])
-                        time_diff_dict[sys_idx_pair] += sum(results)/N_trails_opt
+                        pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
+                        pvec = pvec_list[0]
+                        for _ in range(N_trials_opt):
+                            worker_id = _test_logL.remote(
+                                pvec, 
+                                self.targetcomputer_id
+                                )
+                            worker_id_dict[worker_id] = sys_idx_pair
+
+                    worker_id_list = list(worker_id_dict.keys())
+                    while worker_id_list:
+                        worker_id, worker_id_list = ray.wait(
+                            worker_id_list, timeout=_TIMEOUT)
+                        failed = len(worker_id) == 0
+                        if not failed:
+                            try:
+                                results = ray.get(worker_id[0], timeout=_TIMEOUT)
+                            except:
+                                failed = True
+                            if not failed:
+                                sys_idx_pair = worker_id_dict[worker_id[0]]
+                                time_diff_dict[sys_idx_pair] += results/N_trials_opt
+                                del worker_id_dict[worker_id[0]]
+                        if failed:
+                            if len(worker_id) > 0:
+                                if worker_id[0] not in worker_id_list:
+                                    worker_id_list.append(worker_id[0])
+                            resubmit_list = retrieve_failed_workers(worker_id_list)
+                            for worker_id in resubmit_list:
+                                del worker_id_dict[worker_id]
+                                ray.cancel(worker_id, force=True)
+                                pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
+                                pvec = pvec_list[0]
+                                worker_id = _test_logL.remote(
+                                    pvec, 
+                                    self.targetcomputer_id
+                                    )
+                                worker_id_dict[worker_id] = sys_idx_pair
+                            worker_id_list = list(worker_id_dict.keys())
 
                     system_idx_list_batch = [sys_idx_pair for sys_idx_pair, _ in sorted(time_diff_dict.items(), key=lambda items: items[1], reverse=True)]
                     system_idx_list_batch = tuple(system_idx_list_batch)
@@ -2037,14 +2027,14 @@ class ForceFieldOptimizer(BaseOptimizer):
                 for mngr_idx in range(self.N_mngr):
                     for sys_idx_pair in system_idx_list_batch:
                         votes_split_list = self.get_votes(
-                            worker_list=split_worker_id_dict[mngr_idx,sys_idx_pair][0],
+                            worker_id_dict=split_worker_id_dict[mngr_idx,sys_idx_pair][0],
                             low_to_high=True,
                             abs_grad_score=False,
                             norm_cutoff=1.e-2,
                             keep_N_best=keep_N_best,
                             )
                         worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
-                            mngr_idx=mngr_idx,
+                            mngr_idx_main=mngr_idx,
                             system_idx_list=sys_idx_pair,
                             votes_split_list=votes_split_list,
                             parallel_targets=False,
@@ -2094,87 +2084,120 @@ class ForceFieldOptimizer(BaseOptimizer):
                             parm_penalty = self.parm_penalty_split,
                             verbose = self.verbose,
                             )
-                        selection_worker_id_dict[sys_idx_pair] = worker_id
+                        selection_worker_id_dict[worker_id] = sys_idx_pair
 
-                    for sys_idx_pair in selection_worker_id_dict:
+                    selection_worker_id_list = list(selection_worker_id_dict.keys())
+                    while selection_worker_id_list:
                         if self.verbose:
                             print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
+                        worker_id, selection_worker_id_list = ray.wait(
+                            selection_worker_id_list, timeout=_TIMEOUT)
+                        failed = len(worker_id) == 0
+                        if not failed:
+                            try:
+                                _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                                    worker_id[0], timeout=_TIMEOUT)
+                            except:
+                                failed = True
+                            if not failed:
+                                sys_idx_pair = selection_worker_id_dict[worker_id[0]]
+                                found_improvement_mngr = new_AIC < best_AIC
 
-                        worker_id = selection_worker_id_dict[sys_idx_pair]
-                        try:
-                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(worker_id)
-                        except:
-                            continue
-                        found_improvement_mngr = new_AIC < best_AIC
-
-                        if self.verbose:
-                            print(
-                                "Current best AIC:", best_AIC,
-                                "New AIC:", new_AIC,
-                                )
-                            if found_improvement_mngr:
-                                print(
-                                    f"Found improvement for sys {sys_idx_pair}."
-                                    )
-                            else:
-                                print(
-                                    f"Found no improvement for sys {sys_idx_pair}.",
-                                    )
-
-                        if found_improvement_mngr:
-                            found_improvement = True
-                            best_AIC = new_AIC
-                        else:
-                            continue
-
-                        if self.verbose:
-                            print("Solution globally accepted.")
-                        for _mngr_idx in range(self.N_mngr):
-                            old_pvec_list[_mngr_idx].reset(
-                                pvec_list[_mngr_idx]
-                                )
-                            old_bitvec_type_list[_mngr_idx] = copy.deepcopy(
-                                best_bitvec_type_list[_mngr_idx])
-                            if self.verbose:
-                                print(
-                                    f"Updated parameters for mngr {_mngr_idx}:",
-                                    old_pvec_list[_mngr_idx].vector_k,
-                                    f"with {old_pvec_list[_mngr_idx].force_group_count} force groups"
-                                    )
-                                print(
-                                    f"Updated allocations for mngr {_mngr_idx}:",
-                                    old_pvec_list[_mngr_idx].allocations
-                                )
-                                print(
-                                    f"Updated bitvec hashes for mngr {_mngr_idx}:",
-                                    old_bitvec_type_list[_mngr_idx]
-                                    )
-                                print(
-                                    f"Updated SMARTS hierarchy for mngr {_mngr_idx}:"
-                                    )
-
-                                bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
-                                for idx, b in enumerate(old_bitvec_type_list[_mngr_idx]):
-                                    sma = bsm.bitvector_to_smarts(b)
+                                if self.verbose:
                                     print(
-                                        f"Type {idx} : {sma}"
+                                        "Current best AIC:", best_AIC,
+                                        "New AIC:", new_AIC,
                                         )
+                                    if found_improvement_mngr:
+                                        print(
+                                            f"Found improvement for sys {sys_idx_pair}."
+                                            )
+                                    else:
+                                        print(
+                                            f"Found no improvement for sys {sys_idx_pair}.",
+                                            )
+                                
+                                if found_improvement_mngr:
+                                    found_improvement = True
+                                    best_AIC = new_AIC
+                                else:
+                                    del selection_worker_id_dict[worker_id[0]]
+                                    continue
 
-                        if found_improvement_mngr:
-                            for _mngr_idx in range(self.N_mngr):
-                                self.update_best(
-                                    _mngr_idx,
-                                    old_pvec_list[_mngr_idx],
-                                    old_bitvec_type_list[_mngr_idx]
+                                if self.verbose:
+                                    print("Solution globally accepted.")
+                                for _mngr_idx in range(self.N_mngr):
+                                    old_pvec_list[_mngr_idx].reset(
+                                        pvec_list[_mngr_idx]
+                                        )
+                                    old_bitvec_type_list[_mngr_idx] = copy.deepcopy(
+                                        best_bitvec_type_list[_mngr_idx])
+                                    if self.verbose:
+                                        print(
+                                            f"Updated parameters for mngr {_mngr_idx}:",
+                                            old_pvec_list[_mngr_idx].vector_k,
+                                            f"with {old_pvec_list[_mngr_idx].force_group_count} force groups"
+                                            )
+                                        print(
+                                            f"Updated allocations for mngr {_mngr_idx}:",
+                                            old_pvec_list[_mngr_idx].allocations
+                                        )
+                                        print(
+                                            f"Updated bitvec hashes for mngr {_mngr_idx}:",
+                                            old_bitvec_type_list[_mngr_idx]
+                                            )
+                                        print(
+                                            f"Updated SMARTS hierarchy for mngr {_mngr_idx}:"
+                                            )
+
+                                        bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
+                                        for idx, b in enumerate(old_bitvec_type_list[_mngr_idx]):
+                                            sma = bsm.bitvector_to_smarts(b)
+                                            print(
+                                                f"Type {idx} : {sma}"
+                                                )
+
+                                if found_improvement_mngr:
+                                    for _mngr_idx in range(self.N_mngr):
+                                        self.update_best(
+                                            _mngr_idx,
+                                            old_pvec_list[_mngr_idx],
+                                            old_bitvec_type_list[_mngr_idx]
+                                            )
+
+                                import pickle
+                                with open(f"{prefix}-MAIN-{iteration_idx}-SPLIT-{split_iteration_idx}-ACCEPTED-{accepted_counter}.pickle", "wb") as fopen:
+                                    pickle.dump(
+                                        self,
+                                        fopen
                                     )
+                                accepted_counter += 1
+                                
+                                del selection_worker_id_dict[worker_id[0]]
 
-                        import pickle
-                        with open(f"{prefix}-MAIN-{iteration_idx}-SPLIT-{split_iteration_idx}-ACCEPTED-{accepted_counter}.pickle", "wb") as fopen:
-                            pickle.dump(
-                                self,
-                                fopen
-                            )
-                        accepted_counter += 1
+                        if failed:
+                            if len(worker_id) > 0:
+                                if worker_id[0] not in selection_worker_id_list:
+                                    selection_worker_id_list.append(worker_id[0])
+                            resubmit_list = retrieve_failed_workers(selection_worker_id_list)
+                            for worker_id in resubmit_list:
+                                sys_idx_pair = selection_worker_id_dict[worker_id]
+                                ray.cancel(worker_id, force=True)
+                                del selection_worker_id_dict[worker_id]
+
+                                worker_id = set_parameters_remote.remote(
+                                    mngr_idx_main = mngr_idx,
+                                    pvec_list = old_pvec_list,
+                                    targetcomputer = self.targetcomputer_id,
+                                    bitvec_dict = bitvec_dict[mngr_idx, sys_idx_pair],
+                                    bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                    bitvec_type_list_list = old_bitvec_type_list,
+                                    worker_id_dict = worker_id_dict[mngr_idx,sys_idx_pair],
+                                    parm_penalty = self.parm_penalty_split,
+                                    verbose = self.verbose,
+                                    )
+                                selection_worker_id_dict[worker_id] = sys_idx_pair
+                            selection_worker_id_list = list(selection_worker_id_dict.keys())
 
                 split_iteration_idx += 1
                 
@@ -2196,7 +2219,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     pvec, 
                     bitvec_list,
                     bsm,
-                    self.targetcomputer,
+                    self.targetcomputer_id,
                     theta=1000.,
                     alpha=10.,
                     N_iter = max_gibbs_attempts,

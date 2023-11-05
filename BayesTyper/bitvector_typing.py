@@ -1,4 +1,6 @@
 import ray
+from .constants import _TIMEOUT, _VERBOSE
+from .ray_tools import retrieve_failed_workers
 
 def get_primitives(rdmol_list, smarts_dict, atom_idx_list):
 
@@ -155,47 +157,92 @@ def and_bitvectors(
         N_keys   = len(bitvec_list)
         N_entries = N_keys * (N_keys - 1) / 2
         N_entries = int(N_entries)
-        bitvec_list_id = ray.put(tuple(bitvec_list))
+        for _ in range(20):
+            try:
+                bitvec_list_id = ray.put(
+                    tuple(bitvec_list)
+                    )
+                break
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                import time
+                time.sleep(2)
         if chunk_size_max > N_entries:
             chunk_size_max = N_entries
         start = 0
         stop  = chunk_size_max
         chunks_count = int(N_entries/chunk_size_max)
-        worker_id_list = list()
+        worker_id_dict = dict()
         for _ in range(chunks_count):
-            worker_id_list.append(
-                compute_bitvector_product.remote(
-                    bitvec_list_id,
-                    start, 
-                    stop,
-                    max_on,
-                    maxbits
-                )
-            )
+            worker_id = compute_bitvector_product.remote(
+                                bitvec_list_id,
+                                start, 
+                                stop,
+                                max_on,
+                                maxbits
+                            )
+            worker_id_dict[worker_id] = start, stop
             start = stop
             stop  = start + chunk_size_max
         res = N_entries%chunk_size_max
         if res > 0:
             start = N_entries-res
             stop = start + res
-            worker_id_list.append(
-                compute_bitvector_product.remote(
-                    bitvec_list_id,
-                    start, 
-                    stop,
-                    max_on,
-                    maxbits
-                )
-            )
+            worker_id = compute_bitvector_product.remote(
+                                bitvec_list_id,
+                                start, 
+                                stop,
+                                max_on,
+                                maxbits
+                            )
+            worker_id_dict[worker_id] = start, stop
 
+        worker_id_list = list(worker_id_dict.keys())
         while worker_id_list:
-            [worker_id], worker_id_list = ray.wait(worker_id_list)
-            bitvec_list_new = ray.get(worker_id)
-            d_new = len(bitvec_list)
-            bitvec_list.update(bitvec_list_new)
-            d_new = len(bitvec_list) - d_new
-            found_new += d_new
-                    
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, 
+                timeout=_TIMEOUT
+                )
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    bitvec_list_new = ray.get(
+                        worker_id[0], 
+                        timeout=_TIMEOUT
+                        )
+                except:
+                    failed = True
+                if not failed:
+                    d_new = len(bitvec_list)
+                    bitvec_list.update(bitvec_list_new)
+                    d_new = len(bitvec_list) - d_new
+                    found_new += d_new
+                    del worker_id_dict[worker_id[0]]
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])
+                resubmit_list = retrieve_failed_workers(worker_id_list, verbose=False)
+                print(
+                    f"Could not retrieve anything from {len(worker_id_list)} tasks.",
+                    f"Resubmitting {len(resubmit_list)} failed tasks."
+                    )
+                for worker_id in resubmit_list:
+                    start, stop = worker_id_dict[worker_id]
+                    ray.cancel(worker_id, force=True)
+                    del worker_id_dict[worker_id]
+                    worker_id = compute_bitvector_product.remote(
+                        tuple(bitvec_list),
+                        start, 
+                        stop,
+                        max_on,
+                        maxbits
+                        )
+                    worker_id_dict[worker_id] = start, stop
+                worker_id_list = list(worker_id_dict.keys())
+
         if verbose:
             print(
                 f"Found {len(bitvec_list)} unique bit vectors."
@@ -722,50 +769,94 @@ class BitSmartsManager(object):
                 "Preparing bitvector encoding"
             )
 
-        worker_id_list = list()
-        primitive_mapping_neighbor_dict_id = ray.put(
-            self.primitive_mapping_neighbor_dict
-        )
-        primitive_mapping_dict_id = ray.put(
-            self.primitive_mapping_dict
-        )
+        for _ in range(20):
+            try:
+                primitive_mapping_neighbor_dict_id = ray.put(
+                    self.primitive_mapping_neighbor_dict
+                )
+                primitive_mapping_dict_id = ray.put(
+                    self.primitive_mapping_dict
+                )
+                break
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                import time
+                time.sleep(2)
 
         if len(allocations) == 0:
             allocations = list(range(self.N_allocs))
 
+        worker_id_dict = dict()
         for a in allocations:
             v = self.primitive_binary_parent[a]
             if v:
                 for _a in [a, a+self.N_allocs]:
                     b = self.primitive_binary[_a]
                     bn = self.primitive_binary_neighbor[_a]
-                    worker_id_list.append(
-                        prepare_encoding.remote(
-                            b,
-                            bn,
-                            a, ### This must be `a`, not `_a`
-                            self._max_neighbor,
-                            max_neighbor,
-                            primitive_mapping_neighbor_dict_id,
-                            primitive_mapping_dict_id,
-                            maxbits,
-                            max_on
-                        )
+                    worker_id = prepare_encoding.remote(
+                        b,
+                        bn,
+                        a, ### This must be `a`, not `_a`
+                        self._max_neighbor,
+                        max_neighbor,
+                        primitive_mapping_neighbor_dict_id,
+                        primitive_mapping_dict_id,
+                        maxbits,
+                        max_on
                     )
-
+                    worker_id_dict[worker_id] = b, bn, a
         bitvec_list = set()
         bitvec_list_alloc_dict = dict()
-        while worker_id_list:
-            worker_id, worker_id_list = ray.wait(worker_id_list)
-            _bitvec_list, _bitvec_list_alloc_dict = ray.get(worker_id[0])
-            bitvec_list.update(_bitvec_list)
-            for key in _bitvec_list_alloc_dict:
-                if key in bitvec_list_alloc_dict:
-                    bitvec_list_alloc_dict[key].update(
-                        _bitvec_list_alloc_dict[key]
-                    )
-                else:
-                    bitvec_list_alloc_dict[key] = _bitvec_list_alloc_dict[key]
+        worker_id_list = list(worker_id_dict.keys())
+        while len(worker_id_list) > 0:
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, timeout=_TIMEOUT)
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    _bitvec_list, _bitvec_list_alloc_dict = ray.get(
+                        worker_id[0], timeout=_TIMEOUT)
+                except:
+                    failed = True
+
+                if not failed:
+                    bitvec_list.update(_bitvec_list)
+                    for key in _bitvec_list_alloc_dict:
+                        if key in bitvec_list_alloc_dict:
+                            bitvec_list_alloc_dict[key].update(
+                                _bitvec_list_alloc_dict[key]
+                            )
+                        else:
+                            bitvec_list_alloc_dict[key] = _bitvec_list_alloc_dict[key]
+                    del worker_id_dict[worker_id[0]]
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])
+                resubmit_list = retrieve_failed_workers(worker_id_list)
+                for worker_id in resubmit_list:
+                    ray.cancel(worker_id, force=True)
+                    b, bn, a = worker_id_dict[worker_id]
+                    del worker_id_dict[worker_id]
+                    ray.get(primitive_mapping_neighbor_dict_id)
+                    ray.get(primitive_mapping_dict_id)
+                    worker_id = prepare_encoding.remote(
+                        b,
+                        bn,
+                        a, ### This must be `a`, not `_a`
+                        self._max_neighbor,
+                        max_neighbor,
+                        primitive_mapping_neighbor_dict_id,
+                        primitive_mapping_dict_id,
+                        maxbits,
+                        max_on
+                        )
+                    worker_id_dict[worker_id] = b, bn, a
+                worker_id_list = list(worker_id_dict.keys())
+                import time
+                time.sleep(_TIMEOUT)
             
         return bitvec_list, bitvec_list_alloc_dict
 

@@ -13,6 +13,9 @@ import math
 import copy
 import ray
 
+from .constants import _TIMEOUT, _VERBOSE
+from .ray_tools import retrieve_failed_workers
+
 # ==============================================================================
 # GLOBAL PARAMETERS
 # ==============================================================================
@@ -199,14 +202,40 @@ class LikelihoodVectorized(object):
 
         self.apply_changes(vec, grad=False)
 
-        worker_id_list = [
-            self.targetcomputer.__call__({key:value}, False) for key, value in self.openmm_system_dict.items()
-            ]
+        worker_id_dict = dict()
+        for key in self.openmm_system_dict:
+            value = self.openmm_system_dict[key]
+            worker_id = self.targetcomputer.__call__({key:value}, False)
+            worker_id_dict[worker_id] = key
+            
+        worker_id_list = list(worker_id_dict.keys())
         logP_likelihood = 0.
         while worker_id_list:
-            worker_id, worker_id_list = ray.wait(worker_id_list)
-            _logP_likelihood = ray.get(worker_id[0])
-            logP_likelihood += _logP_likelihood
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, timeout=_TIMEOUT)
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    _logP_likelihood = ray.get(
+                        worker_id[0], timeout=_TIMEOUT)
+                except:
+                    failed = True
+                if not failed:
+                    logP_likelihood += _logP_likelihood
+                    del worker_id_dict[worker_id[0]]
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])
+                resubmit_list = retrieve_failed_workers(worker_id_list)
+                for worker_id in resubmit_list:
+                    ray.cancel(worker_id, force=True)
+                    key = worker_id_dict[worker_id]
+                    del worker_id_dict[worker_id]
+                    value = self.openmm_system_dict[key]
+                    worker_id = self.targetcomputer.__call__({key:value}, False)
+                    worker_id_dict[worker_id] = key
+                worker_id_list = list(worker_id_dict.keys())
 
         return logP_likelihood
 
@@ -232,38 +261,81 @@ class LikelihoodVectorized(object):
         for parm_idx in self.openmm_system_fwd_dict:
             if not parm_idx in parm_idx_list:
                 continue
-            for openmm_system_dict in self.openmm_system_fwd_dict[parm_idx]:
+            for sys_idx, openmm_system_dict in enumerate(self.openmm_system_fwd_dict[parm_idx]):
                 worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                worker_id_dict[worker_id] = parm_idx, 1.
+                worker_id_dict[worker_id] = parm_idx, 1., sys_idx
             if self._three_point:
-                for openmm_system_dict in self.openmm_system_bkw_dict[parm_idx]:
+                for sys_idx, openmm_system_dict in enumerate(self.openmm_system_bkw_dict[parm_idx]):
                     worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                    worker_id_dict[worker_id] = parm_idx, -1.
+                    worker_id_dict[worker_id] = parm_idx, -1., sys_idx
 
         grad = np.zeros(self.N_parms, dtype=float)
         if not self._three_point:
             worker_id_dict_logL = {
                 self.targetcomputer.__call__({key:value}, False) : key for key, value in self.openmm_system_dict.items()
                 }
-
-            worker_id_list_logL = list(worker_id_dict_logL.keys())
-            while worker_id_list_logL:
-                worker_id, worker_id_list_logL = ray.wait(worker_id_list_logL)
-                worker_id = worker_id[0]
-                _logP_likelihood = ray.get(worker_id)
-                sysname = worker_id_dict_logL[worker_id]
-                parm_idx_list = self.parm_idx_sysname_dict[sysname]
-                for parm_idx in parm_idx_list:
-                    grad[parm_idx] -= _logP_likelihood
+            worker_id_list = list(worker_id_dict_logL.keys())
+            while worker_id_list:
+                worker_id, worker_id_list = ray.wait(
+                    worker_id_list, timeout=_TIMEOUT)
+                failed = len(worker_id) == 0
+                if not failed:
+                    try:
+                        _logP_likelihood = ray.get(
+                            worker_id[0], timeout=_TIMEOUT)
+                    except:
+                        failed = True
+                    if not failed:
+                        sysname = worker_id_dict_logL[worker_id[0]]
+                        parm_idx_list = self.parm_idx_sysname_dict[sysname]
+                        for parm_idx in parm_idx_list:
+                            grad[parm_idx] -= _logP_likelihood
+                        del worker_id_dict_logL[worker_id[0]]
+                if failed:
+                    if len(worker_id) > 0:
+                        if worker_id[0] not in worker_id_list:
+                            worker_id_list.append(worker_id[0])
+                    resubmit_list = retrieve_failed_workers(worker_id_list)
+                    for worker_id in resubmit_list:
+                        key = worker_id_dict_logL[worker_id]
+                        ray.cancel(worker_id, force=True)
+                        del worker_id_dict_logL[worker_id]
+                        value = self.openmm_system_dict[key]
+                        worker_id = self.targetcomputer.__call__({key:value}, False)
+                        worker_id_dict_logL[worker_id] = key
+                    worker_id_list = list(worker_id_dict_logL.keys())
 
         worker_id_list = list(worker_id_dict.keys())
         while worker_id_list:
-            worker_id, worker_id_list = ray.wait(worker_id_list)
-            worker_id = worker_id[0]
-            _logP_likelihood = ray.get(worker_id)
-            parm_idx, sign = worker_id_dict[worker_id]
-            if not np.isnan(_logP_likelihood):
-                grad[parm_idx] += _logP_likelihood * sign
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list, timeout=_TIMEOUT)
+            failed = len(worker_id) == 0
+            if not failed:
+                try:
+                    _logP_likelihood = ray.get(
+                        worker_id[0], timeout=_TIMEOUT)
+                except:
+                    failed = True
+                if not failed:
+                    parm_idx, sign, sys_idx = worker_id_dict[worker_id[0]]
+                    grad[parm_idx] += sign * _logP_likelihood
+                    del worker_id_dict[worker_id[0]]
+            if failed:
+                if len(worker_id) > 0:
+                    if worker_id[0] not in worker_id_list:
+                        worker_id_list.append(worker_id[0])
+                resubmit_list = retrieve_failed_workers(worker_id_list)
+                for worker_id in resubmit_list:
+                    ray.cancel(worker_id, force=True)
+                    parm_idx, sign, sys_idx = worker_id_dict[worker_id]
+                    del worker_id_dict[worker_id]
+                    if sign > 0.:
+                        openmm_system_dict = self.openmm_system_fwd_dict[parm_idx][sys_idx]
+                    else:
+                        openmm_system_dict = self.openmm_system_bkw_dict[parm_idx][sys_idx]
+                    worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
+                    worker_id_dict[worker_id] = parm_idx, sign, sys_idx
+                worker_id_list = list(worker_id_dict.keys())
 
         if use_jac:
             #grad *= 1./self.jacobian

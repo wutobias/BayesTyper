@@ -46,3 +46,5 @@ _ANGSTROM_TO_BOHR = 1./0.529177
 _SEED            = 42
 _UNIT_QUANTITY   = unit.quantity.Quantity
 _INACTIVE_GROUP_IDX = -99
+_TIMEOUT         = 20 # timeout in seconds
+_VERBOSE         = False

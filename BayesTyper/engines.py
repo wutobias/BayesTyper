@@ -277,7 +277,7 @@ class OpenmmEngine(object):
 
     def minimize(
         self, 
-        crit=1e-2 * _ENERGY_PER_MOL):
+        crit=1e-4 * _ENERGY_PER_MOL):
 
         success = True
 

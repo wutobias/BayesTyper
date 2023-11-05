@@ -59,14 +59,16 @@ def write_pdb(system_list, optdataset_dict):
     from BayesTyper.engines import OpenmmEngine
     from BayesTyper.constants import _LENGTH_AU
     from openmm import app
+    from openmm import unit
 
     N_sys = len(system_list)
     for sys_idx in range(N_sys):
         sys = system_list[sys_idx]
         smiles = sys.name
         for conf_i in optdataset_dict[smiles]:
-            geo_list_qm = optdataset_dict[smiles][conf_i]["final_geo"]
-            xyz = geo_list_qm*_LENGTH_AU
+            xyz = optdataset_dict[smiles][conf_i]["final_geo"]
+            if not unit.is_quantity(xyz):
+                xyz *= _LENGTH_AU
             engine = OpenmmEngine(
                 sys.openmm_system, 
                 sys.top, 
@@ -129,6 +131,7 @@ def get_plots(
     from BayesTyper.targets import compute_freqs
     import matplotlib.pyplot as plt
     from openmm import unit
+    from .molgraphs import ZMatrix
 
     if optdataset_dict_path == None:
         with open("./CH_dataset_Butane_MM.pickle", "rb") as fopen:
@@ -157,57 +160,154 @@ def get_plots(
         )
     N_sys = len(systemlist)
 
-    if big_plot:
-        ### Determine number of plots to make
-        N_plots = add_plots
-        for sys_idx in range(N_sys):
-            sys = systemlist[sys_idx]
-            smiles = sys.name
-            if not skip_vib:
-                ### Freq.
-                N_plots += 1
-            if not skip_offeq:
-                ### Off-Equ.
-                N_plots += 1
-            if not skip_torsion and smiles in torsiondataset_dict:
-                for conf_i in torsiondataset_dict[smiles]:
-                    for dih_i in torsiondataset_dict[smiles][conf_i]:
-                        ### Torsion
-                        N_plots += 1
+    ### Determine number of plots to make
+    N_plots = add_plots
+    for sys_idx in range(N_sys):
+        sys = systemlist[sys_idx]
+        smiles = sys.name
+        if not skip_vib:
+            ### Freq.
+            N_plots += 1
+        if not skip_offeq:
+            ### Off-Equ.
+            N_plots += 1
+        if not skip_optgeo:
+            ### OptGeo
+            N_plots += 3
+        if not skip_torsion and smiles in torsiondataset_dict:
+            for conf_i in torsiondataset_dict[smiles]:
+                for dih_i in torsiondataset_dict[smiles][conf_i]:
+                    ### Torsion
+                    N_plots += 1
 
-        N_rows  = int(N_plots/N_col)
-        if N_plots%N_col > 0:
-            N_rows += 1
-        fig, _axs = plt.subplots(
-            nrows=N_rows, 
-            ncols=N_col,
-            ### Width,Height in inches
-            figsize=(3.3*N_col,3.*N_rows)
-        )
-        axs = _axs.reshape(-1)
-        
-        tobe_deleted = list()
-        if N_plots%N_col > 0:
-            hangover = N_col - N_plots%N_col
-            for h in range(hangover):
-                tobe_deleted.append(N_plots+h)
-        tobe_deleted = sorted(tobe_deleted)[::-1]
-        for i in tobe_deleted:
-            fig.delaxes(axs[i])
-        _axs = np.delete(axs, tobe_deleted)
-        axs = _axs
+    N_rows  = int(N_plots/N_col)
+    if N_plots%N_col > 0:
+        N_rows += 1
+    fig, _axs = plt.subplots(
+        nrows=N_rows, 
+        ncols=N_col,
+        ### Width,Height in inches
+        figsize=(3.3*N_col,3.*N_rows)
+    )
+    axs = _axs.reshape(-1)
+    
+    tobe_deleted = list()
+    if N_plots%N_col > 0:
+        hangover = N_col - N_plots%N_col
+        for h in range(hangover):
+            tobe_deleted.append(N_plots+h)
+    tobe_deleted = sorted(tobe_deleted)[::-1]
+    for i in tobe_deleted:
+        fig.delaxes(axs[i])
+    _axs = np.delete(axs, tobe_deleted)
+    axs = _axs
 
     N_plots_fig = N_plots
     N_plots = 0
+
+    all_bond_diff_list = list()
+    all_angle_diff_list = list()
+    all_torsion_diff_list = list()
     for sys_idx in range(N_sys):
         sys = systemlist[sys_idx]
         smiles = sys.name
         if verbose:
             print("Molecule:", smiles)
+
         masses = list()
         for rdatom in sys.rdmol.GetAtoms():
             masses.append(float(rdatom.GetMass()))
         masses = np.array(masses) * _ATOMIC_MASS
+
+        bond_diffs    = list()
+        angle_diffs   = list()
+        torsion_diffs = list()
+        if not skip_optgeo and smiles in optdataset_dict:
+            for conf_i in optdataset_dict[smiles]:
+                xyz    = optdataset_dict[smiles][conf_i]["final_geo"]
+                if not unit.is_quantity(xyz):
+                    xyz *= _LENGTH_AU
+                engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                engine.set_xyz(xyz)
+                zm = ZMatrix(sys.rdmol)
+                target_zm = zm.build_z_crds(
+                    engine.xyz.in_units_of(_LENGTH)
+                    )
+                success = engine.minimize()
+                current_zm = zm.build_z_crds(
+                    engine.xyz.in_units_of(_LENGTH)
+                    )
+
+                for z_idx, z_value in current_zm.items():
+                    if z_idx == 0:
+                        continue
+                    ### Bonds
+                    if z_idx > 0:
+                        diff = abs(target_zm[z_idx][0] - z_value[0])
+                        bond_diffs.append(
+                            diff.value_in_unit(_LENGTH)
+                            )
+                    ### Angles
+                    if z_idx > 1:
+                        diff = abs(target_zm[z_idx][1] - z_value[1])
+                        angle_diffs.append(
+                            diff.value_in_unit(_ANGLE)
+                            )
+                    ### Torsions
+                    if z_idx > 2:
+                        diff = abs(target_zm[z_idx][2] - z_value[2])
+                        diff = diff.in_units_of(_ANGLE)
+                        if diff > 180.*_ANGLE:
+                            diff = diff - 360.*_ANGLE
+                            diff = abs(diff)
+                        torsion_diffs.append(
+                            diff.value_in_unit(_ANGLE)
+                            )
+
+        if len(bond_diffs):
+            axs[N_plots].hist(
+                bond_diffs,
+                histtype="step",
+                density=True,
+            )
+            axs[N_plots].set_xlabel(r"$\Delta$ Bond length [nm]")
+            axs[N_plots].set_ylabel("Density")
+            if smiles in title_dict:
+                axs[N_plots].set_title(f"Bond length error {title_dict[smiles]}")
+            else:
+                axs[N_plots].set_title(f"Bond length error {smiles}")
+            N_plots += 1
+            all_bond_diff_list.extend(bond_diffs)
+
+        if len(angle_diffs):
+            axs[N_plots].hist(
+                angle_diffs,
+                histtype="step",
+                density=True,
+            )
+            axs[N_plots].set_xlabel(r"$\Delta$ Bond angle [deg]")
+            axs[N_plots].set_ylabel("Density")
+            if smiles in title_dict:
+                axs[N_plots].set_title(f"Bond angle error {title_dict[smiles]}")
+            else:
+                axs[N_plots].set_title(f"Bond angle error {smiles}")
+            N_plots += 1
+            all_angle_diff_list.extend(angle_diffs)
+
+        if len(torsion_diffs):
+            axs[N_plots].hist(
+                torsion_diffs,
+                histtype="step",
+                density=True,
+            )
+            axs[N_plots].set_xlabel(r"$\Delta$ Torsion angle [deg]")
+            axs[N_plots].set_ylabel("Density")
+            if smiles in title_dict:
+                axs[N_plots].set_title(f"Torsion angle error {title_dict[smiles]}")
+            else:
+                axs[N_plots].set_title(f"Torsion angle error {smiles}")
+            N_plots += 1
+            all_torsion_diff_list.extend(torsion_diffs)
 
         freqs_mm_list = list()
         freqs_qm_list = list()
@@ -216,8 +316,11 @@ def get_plots(
                 if not "hessian" in optdataset_dict[smiles][conf_i]:
                     continue
                 hessian_qm = optdataset_dict[smiles][conf_i]["hessian"]
-                hessian_qm = np.array(hessian_qm) * _FORCE_AU / _LENGTH_AU
-                xyz        = optdataset_dict[smiles][conf_i]["final_geo"] * _LENGTH_AU
+                if not unit.is_quantity(hessian_qm):
+                    hessian_qm *= _FORCE_AU / _LENGTH_AU
+                xyz = optdataset_dict[smiles][conf_i]["final_geo"]
+                if not unit.is_quantity(xyz):
+                    xyz *= _LENGTH_AU
                 engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
                 engine.set_xyz(xyz)
                 engine.minimize()
@@ -227,48 +330,27 @@ def get_plots(
                 freqs_mm_list.extend(freqs_mm._value)
                 freqs_qm_list.extend(freqs_qm._value)
 
-        if big_plot:
-            if len(freqs_mm_list) == 0:
-                continue
-            axs[N_plots].scatter(
-                freqs_mm_list,
-                freqs_qm_list,
-                color="red"
-            )
-            axs[N_plots].set_xlabel("This FF [cm-1]")
-            axs[N_plots].set_ylabel(r"$\nu$ " + f"({name_reference_level_of_theory}) [cm-1]")
-            if smiles in title_dict:
-                axs[N_plots].set_title(f"VibFreq {title_dict[smiles]}")
-            else:
-                axs[N_plots].set_title(f"VibFreq {smiles}")
-            if len(freqs_mm_list)>0 and len(freqs_qm_list)>0:
-                axs[N_plots].plot(
-                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                    linestyle="--",
-                    color="black"
-                )
-            N_plots += 1
+        if len(freqs_mm_list) == 0:
+            continue
+        axs[N_plots].scatter(
+            freqs_mm_list,
+            freqs_qm_list,
+            color="red"
+        )
+        axs[N_plots].set_xlabel("This FF [cm-1]")
+        axs[N_plots].set_ylabel(r"$\nu$ " + f"({name_reference_level_of_theory}) [cm-1]")
+        if smiles in title_dict:
+            axs[N_plots].set_title(f"VibFreq {title_dict[smiles]}")
         else:
-            plt.scatter(
-                freqs_mm_list,
-                freqs_qm_list,
-                color="red"
-                )
-            plt.xlabel("This FF [cm-1]")
-            plt.ylabel(r"$\nu$ " + f"({name_reference_level_of_theory}) [cm-1]")
-            if smiles in title_dict:
-                plt.title(f"VibFreq {title_dict[smiles]}")
-            else:
-                plt.title(f"VibFreq {smiles}")
-            if len(freqs_mm_list)>0 and len(freqs_qm_list)>0:
-                plt.plot(
-                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                    linestyle="--",
-                    color="black"
-                )
-            plt.show()
+            axs[N_plots].set_title(f"VibFreq {smiles}")
+        if len(freqs_mm_list)>0 and len(freqs_qm_list)>0:
+            axs[N_plots].plot(
+                [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
+                [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
+                linestyle="--",
+                color="black"
+            )
+        N_plots += 1
 
         mm_ene_list = list()
         qm_ene_list = list()
@@ -280,10 +362,15 @@ def get_plots(
                     continue
                 ene_list_qm = optdataset_dict[smiles][conf_i]["ene_list"]
                 geo_list_qm = optdataset_dict[smiles][conf_i]["geo_list"]
-                engine = OpenmmEngine(sys.openmm_system, sys.top, geo_list_qm[0]*_LENGTH_AU)
-                for ene, xyz in zip(ene_list_qm, geo_list_qm):
-                    ene *= _ENERGY_AU * unit.constants.AVOGADRO_CONSTANT_NA
+                xyz         = geo_list_qm[0]
+                if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
+                engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                for ene, xyz in zip(ene_list_qm, geo_list_qm):
+                    if not unit.is_quantity(ene):
+                        ene *= _ENERGY_AU * unit.constants.AVOGADRO_CONSTANT_NA
+                    if not unit.is_quantity(xyz):
+                        xyz *= _LENGTH_AU
                     engine.set_xyz(xyz)
                     mm_ene_list.append(
                         engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
@@ -302,49 +389,28 @@ def get_plots(
             qm_ene_list = qm_ene_list[valids]
             mm_ene_list = mm_ene_list[valids]
 
-        if big_plot:
-            if len(mm_ene_list) == 0:
-                continue
-            axs[N_plots].scatter(
-                mm_ene_list,
-                qm_ene_list,
-                color="blue"
-                )
-            axs[N_plots].set_xlabel("Energy (this FF) [kJ/mol]")
-            axs[N_plots].set_ylabel(f"Energy ({name_reference_level_of_theory}) [kJ/mol]")
-            
-            if smiles in title_dict:
-                axs[N_plots].set_title(f"OffEqEne {title_dict[smiles]}")
-            else:
-                axs[N_plots].set_title(f"OffEqEne {smiles}")
-            if len(mm_ene_list)>0 and len(qm_ene_list)>0:
-                axs[N_plots].plot(
-                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                    linestyle="--",
-                    color="black"
-                )
-            N_plots += 1
+        if len(mm_ene_list) == 0:
+            continue
+        axs[N_plots].scatter(
+            mm_ene_list,
+            qm_ene_list,
+            color="blue"
+            )
+        axs[N_plots].set_xlabel("Energy (this FF) [kJ/mol]")
+        axs[N_plots].set_ylabel(f"Energy ({name_reference_level_of_theory}) [kJ/mol]")
+        
+        if smiles in title_dict:
+            axs[N_plots].set_title(f"OffEqEne {title_dict[smiles]}")
         else:
-            plt.scatter(
-                mm_ene_list,
-                qm_ene_list,
-                color="blue"
-                )
-            plt.set_xlabel("Energy (this FF) [kJ/mol]")
-            plt.set_ylabel(f"Energy ({name_reference_level_of_theory}) [kJ/mol]")
-            if smiles in title_dict:
-                plt.title(f"OffEqEne {title_dict[smiles]}")
-            else:
-                plt.title(f"OffEqEne {smiles}")
-            if len(mm_ene_list)>0 and len(qm_ene_list)>0:
-                plt.plot(
-                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                    linestyle="--",
-                    color="black"
-                )
-            plt.show()
+            axs[N_plots].set_title(f"OffEqEne {smiles}")
+        if len(mm_ene_list)>0 and len(qm_ene_list)>0:
+            axs[N_plots].plot(
+                [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
+                [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
+                linestyle="--",
+                color="black"
+            )
+        N_plots += 1
 
         if not skip_torsion and smiles in torsiondataset_dict:
             for conf_i in torsiondataset_dict[smiles]:
@@ -362,10 +428,15 @@ def get_plots(
                     qm_ene_list = list()
                     mm_ene_list = list()
                     dih_crd_list = list()
-                    engine = OpenmmEngine(sys.openmm_system, sys.top, xyz_list[0]*_LENGTH_AU)
-                    for xyz, ene, crd in zip(xyz_list, ene_list, crd_list):
+                    xyz = xyz_list[0]
+                    if not unit.is_quantity(xyz):
                         xyz *= _LENGTH_AU
-                        ene *= _ENERGY_AU * unit.constants.AVOGADRO_CONSTANT_NA
+                    engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                    for xyz, ene, crd in zip(xyz_list, ene_list, crd_list):
+                        if not unit.is_quantity(xyz):
+                            xyz *= _LENGTH_AU
+                        if not unit.is_quantity(ene):
+                            ene *= _ENERGY_AU * unit.constants.AVOGADRO_CONSTANT_NA
                         engine.set_xyz(xyz)
                         qm_ene_list.append(ene.value_in_unit(unit.kilojoule_per_mole))
                         mm_ene_list.append(engine.pot_ene.value_in_unit(unit.kilojoule_per_mole))
@@ -382,77 +453,56 @@ def get_plots(
 
                     if verbose:
                         print("atom idxs:", torsiondataset_dict[smiles][conf_i][dih_i]["dih_idxs"])
-                    if big_plot:
-                        axs[N_plots].scatter(
-                            dih_crd_list[crd_sort_idxs],
-                            qm_ene_list[crd_sort_idxs],
-                            color="black",
-                            )
-                        axs[N_plots].scatter(
-                            dih_crd_list[crd_sort_idxs],
-                            mm_ene_list[crd_sort_idxs],
-                            color="green",
-                            )
-                        axs[N_plots].plot(
-                            dih_crd_list[crd_sort_idxs],
-                            qm_ene_list[crd_sort_idxs],
-                            label=f"{name_reference_level_of_theory}",
-                            color="black",
-                            )
-                        axs[N_plots].plot(
-                            dih_crd_list[crd_sort_idxs],
-                            mm_ene_list[crd_sort_idxs],
-                            label=f"This FF",
-                            color="green",
-                            )
-                        axs[N_plots].set_xlabel("Dihedral angle [degree]")
-                        axs[N_plots].set_ylabel("Energy [kJ/mol]")
 
-                        if smiles in title_dict:
-                            axs[N_plots].set_title(f"TorEne {title_dict[smiles]}")
-                        else:
-                            axs[N_plots].set_title(f"TorEne {smiles}")
-                        axs[N_plots].legend(loc="upper left")
-                        N_plots += 1                                               
+                    axs[N_plots].scatter(
+                        dih_crd_list[crd_sort_idxs],
+                        qm_ene_list[crd_sort_idxs],
+                        color="black",
+                        )
+                    axs[N_plots].scatter(
+                        dih_crd_list[crd_sort_idxs],
+                        mm_ene_list[crd_sort_idxs],
+                        color="green",
+                        )
+                    axs[N_plots].plot(
+                        dih_crd_list[crd_sort_idxs],
+                        qm_ene_list[crd_sort_idxs],
+                        label=f"{name_reference_level_of_theory}",
+                        color="black",
+                        )
+                    axs[N_plots].plot(
+                        dih_crd_list[crd_sort_idxs],
+                        mm_ene_list[crd_sort_idxs],
+                        label=f"This FF",
+                        color="green",
+                        )
+                    axs[N_plots].set_xlabel("Dihedral angle [degree]")
+                    axs[N_plots].set_ylabel("Energy [kJ/mol]")
+
+                    if smiles in title_dict:
+                        axs[N_plots].set_title(f"TorEne {title_dict[smiles]}")
                     else:
-                        plt.scatter(
-                            dih_crd_list[crd_sort_idxs],
-                            qm_ene_list[crd_sort_idxs],
-                            color="black",
-                            )
-                        plt.scatter(
-                            dih_crd_list[crd_sort_idxs],
-                            mm_ene_list[crd_sort_idxs],
-                            color="green",
-                            )
-                        plt.plot(
-                            dih_crd_list[crd_sort_idxs],
-                            qm_ene_list[crd_sort_idxs],
-                            label=f"{name_reference_level_of_theory}",
-                            color="black",
-                            )
-                        plt.plot(
-                            dih_crd_list[crd_sort_idxs],
-                            mm_ene_list[crd_sort_idxs],
-                            label=f"This FF",
-                            color="green",
-                            )
-                        plt.xlabel("Dihedral angle [degree]")
-                        plt.ylabel("Energy [kJ/mol]")
-                        if smiles in title_dict:
-                            plt.title(f"TorEne {title_dict[smiles]}")
-                        else:
-                            plt.title(f"TorEne {smiles}")
-                        plt.legend(loc="upper left")
-                        plt.show()
+                        axs[N_plots].set_title(f"TorEne {smiles}")
+                    axs[N_plots].legend(loc="upper left")
+                    N_plots += 1                                               
                         
-    if big_plot:
-        diff_N_plots = N_plots_fig - N_plots
-        for i in range(1,diff_N_plots+1):
-            fig.delaxes(axs[-i])
-        return fig, axs
-    else:
-        return
+    if all_bond_diff_list:
+        print(
+            f"Bond length err {np.mean(all_bond_diff_list)} +/- {np.std(all_bond_diff_list)} nm"
+            )
+    if all_angle_diff_list:
+        print(
+            f"Bond angle err {np.mean(all_angle_diff_list)} +/- {np.std(all_angle_diff_list)} deg"
+            )
+    if all_torsion_diff_list:
+        print(
+            f"Torsion err {np.mean(all_torsion_diff_list)} +/- {np.std(all_torsion_diff_list)} deg"
+            )
+
+    diff_N_plots = N_plots_fig - N_plots
+    for i in range(1,diff_N_plots+1):
+        fig.delaxes(axs[-i])
+    return fig, axs
 
 
 def _remove_types(

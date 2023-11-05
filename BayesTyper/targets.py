@@ -36,7 +36,9 @@ from .constants import (_LENGTH,
                         _ENERGY_PER_MOL,
                         _WAVENUMBER,
                         _UNIT_QUANTITY,
-                        _FORCE)
+                        _FORCE,
+                        _TIMEOUT,
+                        _VERBOSE)
 
 # ==============================================================================
 # PRIVATE SUBROUTINES
@@ -64,8 +66,8 @@ def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
                 target = copy.deepcopy(
                     target_dict[sys_name][target_idx]
                     )
-                target.set_openmm_system(openmm_system)
                 try:
+                    target.set_openmm_system(openmm_system)
                     target.run()
                     rss = target.rss
                     log_norm_factor = target.log_norm_factor
@@ -73,6 +75,9 @@ def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
                     results_dict["rss"][target_idx] = target.rss
                     results_dict["log_norm_factor"][target_idx] = target.log_norm_factor
                 except:
+                    if _VERBOSE:
+                        import traceback
+                        print(traceback.format_exc())
                     logP_likelihood = -99999999999999999.
                     results_dict["rss"][target_idx] = -9999999999999999.
                     results_dict["log_norm_factor"][target_idx] = target.log_norm_factor

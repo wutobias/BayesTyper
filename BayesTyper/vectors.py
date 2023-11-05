@@ -90,7 +90,7 @@ class BaseVector(object):
             dtype = [np.float64, float]
         elif dtype in [int, np.int64]:
             dtype = [np.int64, int]
-        elif dtype in [bool, np.bool]:
+        elif dtype in [bool, np.bool_]:
             dtype = [np.bool, bool]
         else:
             raise ValueError(f"dtype {dtype} not understood.")
@@ -342,13 +342,23 @@ class ParameterVectorLinearTransformation(BaseVector):
     def vector_k(self):
         return self._vector_k
 
+    @vector_0.setter
+    @VectorUpdater
+    def vector_0(self, value):
+
+        self._vector_0.vector_values[:] = copy.deepcopy(value[:])
+        k  = self.vector_k[:]
+        v0 = self._vector_0.vector_values * self._vector_units
+        s  = self._scaling_vector.vector_values * self._vector_units
+        self._vector_values[:] = (k-v0)/s
+    
     @VectorUpdater
     def apply_changes(self):
         if self.call_back == None:
             pass
         else:
             self.call_back()
-
+    
     @VectorUpdater
     def reset(self, vector):
 

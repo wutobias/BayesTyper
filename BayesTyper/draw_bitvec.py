@@ -355,6 +355,8 @@ def draw_bitvector_from_bits(
                             f"Type sweep {sma_old} --> {sma_new}",
                         )
                     except:
+                        import traceback
+                        print(traceback.format_exc())
                         print(
                             "Could not generate SMARTS string."
                         )
@@ -376,6 +378,8 @@ def draw_bitvector_from_bits(
                                 f"Type {idx}", sma
                             )
                         except:
+                            import traceback
+                            print(traceback.format_exc())
                             print(
                                 f"Type {idx}", "XXXX"
                             )                            
