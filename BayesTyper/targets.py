@@ -589,7 +589,9 @@ class NormalModeTarget(Target):
 
             success = True
             if self.minimize:
-                success = engine.minimize()
+                success = engine.minimize(
+                    crit=1e-4 * unit.kilojoule * unit.mole**-1
+                    )
             if success:
                 hessian  = engine.compute_hessian()
                 ### Remove 1/mol
