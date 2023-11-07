@@ -51,6 +51,8 @@ _am = atom_matcher()
 @ray.remote
 def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
 
+    import numpy as np
+
     logP_likelihood  = 0.
     if return_results_dict:
         results_all_dict = dict()
@@ -78,8 +80,8 @@ def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
                     if _VERBOSE:
                         import traceback
                         print(traceback.format_exc())
-                    logP_likelihood = -99999999999999999.
-                    results_dict["rss"][target_idx] = -9999999999999999.
+                    logP_likelihood = -np.inf
+                    results_dict["rss"][target_idx] = -np.inf
                     results_dict["log_norm_factor"][target_idx] = target.log_norm_factor
 
             if return_results_dict:
