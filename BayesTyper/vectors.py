@@ -20,7 +20,6 @@ from .tools import (is_type_or_raise,
                     )
 
 from scipy.stats import multivariate_normal
-from sklearn.mixture import GaussianMixture
 
 import networkx as nx
 from networkx.algorithms import isomorphism
@@ -2245,6 +2244,8 @@ class AllocationVecGMM(object):
 
 
     def build_gmm(self, allocation_vector):
+
+        from sklearn.mixture import GaussianMixture
 
         unique_types = np.unique(allocation_vector.vector_values)
 
