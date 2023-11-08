@@ -1,6 +1,20 @@
+
 def retrieve_failed_workers(worker_id_list, verbose=False):
 
     from ray.util import state
+
+    failed_keywords = [
+        "fail",
+        "error",
+        "nil",
+        #"pending_args_avail",
+        "pending_node_assignment",
+    ]
+
+    succes_keywords = [
+        "finish",
+        "running",
+    ]
 
     failed_worker_id_list = list()
     for worker_id in worker_id_list:
@@ -12,41 +26,33 @@ def retrieve_failed_workers(worker_id_list, verbose=False):
             failed = True
         elif isinstance(s, list):
             for _s in s:
-                if "fail" in _s.state.lower():
-                    failed = True
-                elif "error" in _s.state.lower():
-                    failed = True
-                elif "nil" in _s.state.lower():
-                    failed = True
-                elif "pending_args_avail" in _s.state.lower():
-                    failed = True
-                elif "pending_node_assignment" in _s.state.lower():
-                    failed = True
+                _state =_s.state.lower()
+                for k in failed_keywords:
+                    if k in _state:
+                        failed = True
+                        break
 
                 if verbose:
-                    if "finish" not in _s.state.lower() and "running" not in _s.state.lower():
-                        print(
-                            "WHAT IS THIS??????????",
-                            _s
-                        )
+                    for k in succes_keywords:
+                        if k not in _state:
+                            print(
+                                "WHAT IS THIS??????????",
+                                _state
+                            )
         else:
-            if "fail" in s.state.lower():
-                failed = True
-            elif "error" in s.state.lower():
-                failed = True
-            elif "nil" in s.state.lower():
-                failed = True
-            elif "pending_args_avail" in s.state.lower():
-                failed = True
-            elif "pending_node_assignment" in s.state.lower():
-                failed = True
+            _state = s.state.lower()
+            for k in failed_keywords:
+                if k in _state:
+                    failed = True
+                    break
 
             if verbose:
-                if "finish" not in s.state.lower() and "running" not in s.state.lower():
-                    print(
-                        "WHAT IS THIS??????????",
-                        s
-                    )
+                for k in succes_keywords:
+                    if k not in _state:
+                        print(
+                            "WHAT IS THIS??????????",
+                            _state
+                        )
         if failed:
             failed_worker_id_list.append(
                 worker_id
