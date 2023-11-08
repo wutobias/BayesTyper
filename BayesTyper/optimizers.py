@@ -602,7 +602,9 @@ def set_parameters_remote(
     N_mngr = len(pvec_list)
 
     pvec_list_cp = [pvec.copy(include_systems=True) for pvec in pvec_list]
+    pvec_list_initial = [pvec.copy() for pvec in pvec_list]
     bitvec_type_list_list_cp = copy.deepcopy(bitvec_type_list_list)
+    bitvec_type_list_list_initial = copy.deepcopy(bitvec_type_list_list)
 
     system_list = pvec_list_cp[0].parameter_manager.system_list
     for mngr_idx in range(N_mngr):
@@ -689,12 +691,11 @@ def set_parameters_remote(
                         ### parameter values to the optimized ones.
                         ### The allocations will be set in the next step
                         if mngr_idx == mngr_idx_main:
-                            allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
-                            pvec_list_cp[mngr_idx].allocations[:] = allocations
-                            pvec_list_cp[mngr_idx].reset(
-                                _pvec_list[mngr_idx],
-                                pvec_list_cp[mngr_idx].allocations
-                                )
+                            allocations = [0 for _ in pvec_list_cp[mngr_idx_main].allocations]
+                            pvec_list_cp[mngr_idx_main].allocations[:] = allocations
+                            pvec_list_cp[mngr_idx_main].reset(
+                                _pvec_list[mngr_idx_main],
+                                pvec_list_cp[mngr_idx_main].allocations)
                         else:
                             ### Set all parameter values to
                             ### their optimized values.
@@ -706,12 +707,12 @@ def set_parameters_remote(
                                     bitvec_type_all_list[mngr_idx],
                                     allocations
                                     )
-                                if allocations.count(-1) == 0:
+                                N_types = pvec_list_cp[mngr_idx].force_group_count
+                                if allocations.count(-1) == 0 and max(allocations) < N_types:
                                     pvec_list_cp[mngr_idx].allocations[:] = allocations
                                     pvec_list_cp[mngr_idx].reset(
                                         _pvec_list[mngr_idx],
-                                        pvec_list_cp[mngr_idx].allocations
-                                        )
+                                        pvec_list_cp[mngr_idx].allocations)
                             ### Set the parameter values to
                             ### their optimized values only for the 
                             ### targeted mngr and keep the previous
@@ -737,7 +738,8 @@ def set_parameters_remote(
                             bitvec_type_list_list_cp[mngr_idx_main],
                             allocations
                             )
-                        if allocations.count(-1) == 0:
+                        N_types = pvec_list_cp[mngr_idx_main].force_group_count
+                        if allocations.count(-1) == 0 and max(allocations) < N_types:
                             allocs = tuple(allocations)
                             if allocs not in alloc_list:
                                 alloc_list.append(
@@ -771,10 +773,9 @@ def set_parameters_remote(
 
                 for mngr_idx in range(N_mngr):
                     pvec_list_cp[mngr_idx].reset(
-                        pvec_list[mngr_idx]
-                        )
+                        pvec_list_initial[mngr_idx])
                     bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                        bitvec_type_list_list[mngr_idx])
+                        bitvec_type_list_list_initial[mngr_idx])
             
                 del worker_id_dict[worker_id[0]]
 
@@ -1755,7 +1756,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                     del worker_id_dict[worker_id]
                     ray.cancel(worker_id, force=True)
                     _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _mngr_idx, _system_idx_list = args
-                    ray.get(_pvec_id)
                     worker_id = get_gradient_scores.remote(
                         ff_parameter_vector = _pvec_id,
                         targetcomputer = _targetcomputer_id,
@@ -2088,8 +2088,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                     selection_worker_id_list = list(selection_worker_id_dict.keys())
                     while selection_worker_id_list:
-                        if self.verbose:
-                            print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
                         worker_id, selection_worker_id_list = ray.wait(
                             selection_worker_id_list, timeout=_TIMEOUT)
                         failed = len(worker_id) == 0
@@ -2101,6 +2099,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 failed = True
                             if not failed:
                                 sys_idx_pair = selection_worker_id_dict[worker_id[0]]
+                                if self.verbose:
+                                    print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
+
                                 found_improvement_mngr = new_AIC < best_AIC
 
                                 if self.verbose:
