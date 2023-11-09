@@ -9,7 +9,6 @@
 # ==============================================================================
 import time
 import numpy as np
-import networkx as nx
 import copy
 from rdkit.Chem import AllChem as Chem
 from openmm import unit
@@ -22,8 +21,6 @@ from .molgraphs import (pts_to_bond,
                         pts_to_angle,
                         pts_to_dihedral
                         )
-import qcelemental as qcel
-import qcengine as qcng
 
 from .engines import OpenmmEngine
 
@@ -1409,6 +1406,8 @@ def retrieve_complete_torsiondataset(
     grid_spacing = 15.,
     check_Hbond = True,):
 
+    import qcelemental as qcel
+
     dataset_dict = dict()
     worker_dict  = dict()
     for smiles in smiles_list:
@@ -1586,6 +1585,8 @@ def retrieve_complete_dataset(
     generate_forces_bonds = True,
     generate_forces_angles = False,
     generate_forces_torsions = False):
+
+    import qcelemental as qcel
 
     if program in ["psi4"]:
         numerical_hessian = False
@@ -2147,6 +2148,8 @@ def retrieve_optimization_dataset(
     generate_forces_angles: bool = False,
     generate_forces_torsions: bool = False,
     n_samples: int = 100):
+
+    import qcelemental as qcel
 
     ps = Chem.SmilesParserParams()
     ps.removeHs = False
@@ -2754,6 +2757,8 @@ def rdmol_map(rdmol1, rdmol2):
     return GM.mapping.items()
 
 def rdmol_to_nx(rdmol, node_features=None, edge_features=None):
+
+    import networkx as nx
 
     if node_features == None:
         node_features = {
