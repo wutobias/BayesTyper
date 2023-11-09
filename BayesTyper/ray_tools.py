@@ -7,7 +7,7 @@ def retrieve_failed_workers(worker_id_list, verbose=False):
         "fail",
         "error",
         "nil",
-        #"pending_args_avail",
+        "pending_args_avail",
         "pending_node_assignment",
     ]
 
