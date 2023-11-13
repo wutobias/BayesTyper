@@ -1299,6 +1299,10 @@ class BaseOptimizer(object):
             self.N_systems, 
             dtype=int
             )
+
+        if not (N_sys_per_batch < self.N_systems):
+            N_batches = 1
+
         system_idx_list_batch = tuple()
         for _ in range(N_batches):
             np.random.shuffle(system_idx_list)
