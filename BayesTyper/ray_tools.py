@@ -19,14 +19,21 @@ def retrieve_failed_workers(worker_id_list, verbose=False):
     failed_worker_id_list = list()
     for worker_id in worker_id_list:
         failed = False
-        s = state.get_task(
-            worker_id.task_id().hex()
-            )
+        try:
+            s = state.get_task(
+                worker_id.task_id().hex()
+                )
+        except:
+            s = None
         if s == None:
             failed = True
         elif isinstance(s, list):
             for _s in s:
-                _state =_s.state.lower()
+                try:
+                    _state =_s.state.lower()
+                except:
+                    failed = True
+                    break
                 for k in failed_keywords:
                     if k in _state:
                         failed = True
@@ -40,11 +47,14 @@ def retrieve_failed_workers(worker_id_list, verbose=False):
                                 _state
                             )
         else:
-            _state = s.state.lower()
-            for k in failed_keywords:
-                if k in _state:
-                    failed = True
-                    break
+            try:
+                _state = s.state.lower()
+                for k in failed_keywords:
+                    if k in _,state:
+                        failed = True
+                        break
+            except:
+                failed = True
 
             if verbose:
                 for k in succes_keywords:
