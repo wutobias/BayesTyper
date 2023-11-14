@@ -50,7 +50,7 @@ def retrieve_failed_workers(worker_id_list, verbose=False):
             try:
                 _state = s.state.lower()
                 for k in failed_keywords:
-                    if k in _,state:
+                    if k in _state:
                         failed = True
                         break
             except:
