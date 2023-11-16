@@ -107,7 +107,7 @@ class TargetComputer(object):
 
         if target_type_list == None:
             self.target_type_list = None
-        elif len(target_list) == 0:
+        elif len(target_type_list) == 0:
             self.target_type_list = None
         else:
             self.target_type_list = tuple(target_type_list)
