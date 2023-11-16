@@ -106,11 +106,11 @@ class TargetComputer(object):
         self._target_dict = dict()
 
         if target_type_list == None:
-            self.target_type_list = None
+            target_type_list = None
         elif len(target_type_list) == 0:
-            self.target_type_list = None
+            target_type_list = None
         else:
-            self.target_type_list = tuple(target_type_list)
+            target_type_list = tuple(target_type_list)
 
         if isinstance(system_list, list):
             _system_list = system_list
@@ -118,18 +118,16 @@ class TargetComputer(object):
             _system_list = system_list._system_list
 
         for sys in _system_list:
-            if self.target_type_list == None:
+            if target_type_list == None:
                 self._target_dict[sys.name] = copy.deepcopy(
                     sys.target_list
                     )
             else:
+                self._target_dict[sys.name] = list()
                 for target in sys.target_list:
-                    self._target_dict[sys.name] = list()
-                    if isinstance(target, self.target_type_list):
+                    if isinstance(target, target_type_list):
                         self._target_dict[sys.name].append(
-                                copy.deepcopy(
-                                    target
-                                )
+                                copy.deepcopy(target)
                             )
 
         self._target_dict = ray.put(self._target_dict)
