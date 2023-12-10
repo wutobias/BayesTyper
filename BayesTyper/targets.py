@@ -675,9 +675,9 @@ class ForceProjectionMatchingTarget(Target):
     @property
     def log_norm_factor(self):
 
-        value  = self.N_bonds * np.log(self.denom_bond.value_in_unit(_LENGTH))
-        value += self.N_angles * np.log(self.denom_angle.value_in_unit(_ANGLE))
-        value += self.N_torsions * np.log(self.denom_torsion.value_in_unit(_ANGLE))
+        value  = self.N_bonds * np.log(self.denom_bond.value_in_unit(_FORCE))
+        value += self.N_angles * np.log(self.denom_angle.value_in_unit(_FORCE))
+        value += self.N_torsions * np.log(self.denom_torsion.value_in_unit(_FORCE))
 
         return value
 
@@ -713,7 +713,7 @@ class ForceProjectionMatchingTarget(Target):
                 )
             force_q = self.zm.build_grad_projection(
                 B_flat, 
-                np.array(cart_force),
+                cart_force,
                 as_dict=True
                 )
             self.target_force_projection.append(force_q)
