@@ -548,7 +548,7 @@ class BitSmartsManager(object):
 
 
     def generate(self, ring_safe=True):
-
+        
         import numpy as np
 
         all_primitives_dict = get_primitives(
@@ -559,87 +559,41 @@ class BitSmartsManager(object):
                 -1
             )
         )
-        
-        neighbor_indices = np.zeros(
-            (
-                self.N_allocs,
-                self.N_atoms,
-                self._max_neighbor
-            ),
-            dtype=np.int32
-        )
-        neighbor_indices[:] = -1
-        for key in self.smarts_dict:
-            sma, layer, tag = key
-            for sys_idx in range(len(self.rdmol_list)):
-                valids = np.where(self.sysidx_list == sys_idx)[0]
-                if valids.size == 0:
-                    continue
-                _atom_list = np.copy(self.atom_list[valids])
-                _rank_list = np.copy(self.rank_list[valids])
 
-                _rank_list, unique_rank_idxs = np.unique(
+        for sys_idx in range(len(self.rdmol_list)):
+            valids = np.where(self.sysidx_list == sys_idx)[0]
+            if valids.size == 0:
+                continue
+            _atom_list = self.atom_list[valids]
+            _rank_list = self.rank_list[valids]
+            
+            _rank_list, unique_rank_idxs = np.unique(
                     _rank_list, 
                     return_index=True
                     )
-                _atom_list = _atom_list[unique_rank_idxs]
-                atom_idx_list = np.copy(all_primitives_dict[key][sys_idx])
-                if atom_idx_list.size == 0:
+            _atom_list = _atom_list[unique_rank_idxs]
+
+            _atom_list = _atom_list.tolist()
+            _rank_list = _rank_list.tolist()
+
+            primitive_n_dict = dict()
+
+            for key in self.smarts_dict:
+                sma, layer, tag = key
+                if all_primitives_dict[key][sys_idx].size == 0:
                     continue
-                    
-                dtype = np.dtype(
-                    'S{:d}'.format(
-                        self.N_atoms * atom_idx_list.dtype.itemsize
-                    )
-                )
-
-                #if layer > 0:
-                #    invalids = np.equal(
-                #        atom_idx_list[:,:-1],
-                #        atom_idx_list[:,-1,np.newaxis]
-                #    )
-                #    invalids = np.any(invalids, axis=1)
-                #    atom_idx_list = atom_idx_list[
-                #        np.logical_not(invalids)
-                #    ]                
-
-                atom_idx_list_1 = np.frombuffer(
-                    atom_idx_list[:,:-1].tobytes(), 
-                    dtype=dtype
-                )
-                atom_idx_list_2 = np.frombuffer(
-                    _atom_list.tobytes(), 
-                    dtype=dtype
-                )
-
-                intersect, c0, c1 = np.intersect1d(
-                    atom_idx_list_1, 
-                    atom_idx_list_2, 
-                    return_indices=True
-                )
-
-                if intersect.size == 0:
-                    continue
-
-                allocs, _alloc_rank = np.unique(
-                    _rank_list[c1],
-                    return_index=True
-                )
-                c0 = c0[_alloc_rank]
-                c1 = c1[_alloc_rank]
-                
-                assert c0.size == allocs.size
-                assert c0.size == c1.size
+                atom_idx_list   = all_primitives_dict[key][sys_idx][:,:-1].tolist()
+                atom_idx_list_n = all_primitives_dict[key][sys_idx][:,-1].tolist()
 
                 if layer == 0:
-                    for a in allocs:
-                        a = int(a)
-                        if sma == self.parent_smarts:
-                            self.primitive_binary_parent[a] = 1
-                        else:
-                            mapped_idx = self.primitive_mapping_dict[key]
-                            self.primitive_binary[a][mapped_idx] = 1
-                elif self._max_neighbor > 0:
+                    for a, r in zip(_atom_list, _rank_list):
+                        if a in atom_idx_list:
+                            if sma == self.parent_smarts:
+                                self.primitive_binary_parent[r] = 1
+                            else:
+                                mapped_idx = self.primitive_mapping_dict[key]
+                                self.primitive_binary[r][mapped_idx] = 1
+                else:
                     ### Bond
                     if isinstance(tag, (list,tuple)):
                         tag_idx = self.tagged_atom_dict[tag[0]]
@@ -648,61 +602,32 @@ class BitSmartsManager(object):
                         tag_idx = self.tagged_atom_dict[tag]
                     if tag_idx == -1:
                         continue
-                    allocs_valids = allocs
-                    c0_valids     = c0
-
-                    valids = np.less(
-                        neighbor_indices[allocs_valids,tag_idx],
-                        0
-                    )
-                    _valids = np.equal(
-                        atom_idx_list[c0_valids,-1,np.newaxis],
-                        neighbor_indices[allocs_valids,tag_idx]
-                    )
-                    invalid_rows = np.any(_valids, axis=1)
-                    valids[invalid_rows] = False
-
-                    valid_rows = np.any(valids, axis=1)
-                    col_idxs   = np.argmax(valids, axis=1)
-
-                    if np.any(valids):
-                        _atom_idx_list = atom_idx_list[c0_valids[valid_rows],-1]
-                        if ring_safe:
-                            ringsafe_neighbors = np.delete(
-                                neighbor_indices[allocs_valids[valid_rows],:,:],
-                                tag_idx,
-                                axis=1
-                            )
-                            valids_not_ringsafe = np.equal(
-                                _atom_idx_list[:,np.newaxis,np.newaxis],
-                                ringsafe_neighbors
-                            )
-                            valids_ringsafe = np.any(
-                                valids_not_ringsafe, 
-                                axis=(1,2)
-                            )
-                            valids_ringsafe = np.logical_not(valids_ringsafe)
-                            _allocs = allocs_valids[valid_rows][valids_ringsafe]
-                            _cols   = col_idxs[valid_rows][valids_ringsafe]
-                            _atom_idx_list = _atom_idx_list[valids_ringsafe]
-                        else:
-                            _allocs = allocs_valids[valid_rows]
-                            _cols   = col_idxs[valid_rows]
-                            _atom_idx_list = _atom_idx_list
-
-                        neighbor_indices[_allocs,tag_idx,_cols] = _atom_idx_list
-
-                    valids = np.equal(
-                        atom_idx_list[c0_valids,-1,np.newaxis],
-                        neighbor_indices[allocs_valids,tag_idx]
-                    )
-                    mapped_idx_list = self.primitive_mapping_neighbor_dict[key]
-                    nrows = valids.shape[0]
-                    for row_idx in range(nrows):
-                        a = int(allocs_valids[row_idx])
-                        for v in np.where(valids[row_idx])[0]:
-                            mapped_idx = mapped_idx_list[v]
-                            self.primitive_binary_neighbor[a][mapped_idx] = 1
+                        
+                    for a, r in zip(_atom_list, _rank_list):
+                        r = int(r)
+                        mapped_idx_list = self.primitive_mapping_neighbor_dict[key]
+                        if a in atom_idx_list:
+                            v = [i for i,_a in enumerate(atom_idx_list) if _a == a]
+                            for _v in v:
+                                n = atom_idx_list_n[_v]
+                                if n in a:
+                                    continue
+                                if ring_safe:
+                                    if n == tag_idx:
+                                        continue
+                                _key1 = (layer, tag, r)
+                                _key2 = n
+                                if _key1 in primitive_n_dict:
+                                    if _key2 in primitive_n_dict[_key1]:
+                                        _key_id = primitive_n_dict[_key1][_key2]
+                                    else:
+                                        _key_id = len(primitive_n_dict[_key1])
+                                        primitive_n_dict[_key1][_key2] = _key_id
+                                else:
+                                    primitive_n_dict[_key1] = {_key2 : 0}
+                                _key_id = primitive_n_dict[_key1][_key2]
+                                k       = mapped_idx_list[_key_id]
+                                self.primitive_binary_neighbor[r][k] = 1
 
         ### Now make sure that also the reverse
         ### of the smarts is mapped correctly.
