@@ -338,7 +338,6 @@ class LikelihoodVectorized(object):
                 worker_id_list = list(worker_id_dict.keys())
 
         if use_jac:
-            #grad *= 1./self.jacobian
             grad -= np.log(self.jacobian)
 
         if self._three_point:
