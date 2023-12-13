@@ -37,10 +37,16 @@ class LikelihoodVectorized(object):
 
         self._three_point = three_point
 
+        self._N_sys_per_batch = N_sys_per_batch
+
         self.pvec_list = pvec_list
         self.targetcomputer = targetcomputer
 
-        self.N_pvec = len(pvec_list)
+        self._N_pvec = len(pvec_list)
+
+        self._initialize_systems()
+
+    def _initialize_systems(self):
 
         self.N_parms   = 0
         self.pvec_idxs = list()
@@ -50,13 +56,13 @@ class LikelihoodVectorized(object):
         stop  = 0
         self.pvec_list_fwd = list()
         self.openmm_system_fwd_dict = dict()
-        if three_point:
+        if self._three_point:
             self.openmm_system_bkw_dict = dict()
             self.pvec_list_bkw = list()
         self.openmm_system_dict = dict()
         self.parm_idx_sysname_dict = dict()
         parm_idx = 0
-        for i in range(self.N_pvec):
+        for i in range(self._N_pvec):
             pvec    = self.pvec_list[i]
             for sys in pvec.parameter_manager.system_list:
                 if not sys.name in self.openmm_system_dict:
@@ -94,7 +100,7 @@ class LikelihoodVectorized(object):
                 )
 
             self.pvec_list_fwd.append(list())
-            if three_point:
+            if self._three_point:
                 self.pvec_list_bkw.append(list())
             for _parm_idx in range(pvec.size):
                 pvec_cp_fwd = pvec.copy(
@@ -107,7 +113,7 @@ class LikelihoodVectorized(object):
 
                 self.pvec_list_fwd[-1].append(pvec_cp_fwd)
                 self.openmm_system_fwd_dict[parm_idx] = list()
-                if three_point:
+                if self._three_point:
                     pvec_cp_bkw = pvec_cp_fwd.copy(
                         include_systems=True, 
                         rebuild_to_old_systems=False
@@ -123,19 +129,19 @@ class LikelihoodVectorized(object):
                 for sys_idx in range(N_sys):
                     sys_fwd = pvec_cp_fwd.parameter_manager.system_list[sys_idx]
                     fwd_dict[sys_fwd.name] = [sys_fwd.openmm_system]
-                    if three_point:
+                    if self._three_point:
                         sys_bkw = pvec_cp_bkw.parameter_manager.system_list[sys_idx]
                         assert sys_bkw.name == sys_fwd.name
                         bkw_dict[sys_bkw.name] = [sys_bkw.openmm_system]
 
-                    if len(fwd_dict) == N_sys_per_batch:
+                    if len(fwd_dict) == self._N_sys_per_batch:
                         self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
                         fwd_dict = dict()
-                        if three_point:
+                        if self._three_point:
                             self.openmm_system_bkw_dict[parm_idx].append(bkw_dict)
                             bkw_dict = dict()
 
-                    if not three_point:
+                    if not self._three_point:
                         if sys_fwd.name in self.parm_idx_sysname_dict:
                             self.parm_idx_sysname_dict[sys_fwd.name].append(parm_idx)
                         else:
@@ -143,7 +149,7 @@ class LikelihoodVectorized(object):
 
                 if len(fwd_dict) > 0:
                     self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
-                    if three_point:
+                    if self._three_point:
                         self.openmm_system_bkw_dict[parm_idx].append(bkw_dict)
 
                 parm_idx += 1
@@ -154,7 +160,7 @@ class LikelihoodVectorized(object):
     def pvec(self):
 
         pvec_list = list()
-        for i in range(self.N_pvec):
+        for i in range(self._N_pvec):
             pvec_list.extend(
             self.pvec_list[i].copy()[:].tolist()
             )
@@ -167,7 +173,7 @@ class LikelihoodVectorized(object):
                 f"Length of vec is {vec.size} but must be {self.N_parms}"
                 )
 
-        for i in range(self.N_pvec):
+        for i in range(self._N_pvec):
             pvec       = self.pvec_list[i]
             start_stop = self.pvec_idxs[i]
             pvec[:]    = vec[start_stop[0]:start_stop[1]]
@@ -244,7 +250,7 @@ class LikelihoodVectorized(object):
         vec, 
         parm_idx_list=None,
         grad_diff=1.e-2, 
-        use_jac=True,
+        use_jac=False,
         ):
 
         import numpy as np
