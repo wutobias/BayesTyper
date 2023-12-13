@@ -229,24 +229,28 @@ def get_gradient_scores(
 
     initial_vec = copy.deepcopy(ff_parameter_vector_cp[first_parm_i:last_parm_i])
 
-    grad_score_dict = dict()
-    grad_norm_dict  = dict()
-    allocation_list_dict = dict()
-    selection_list_dict = dict()
-    type_list_dict  = dict()
-    for trial_idx in range(N_trials):
-        ff_parameter_vector_cp[first_parm_i:last_parm_i]  = initial_vec
-        ff_parameter_vector_cp[first_parm_i:last_parm_i] += np.random.normal(0, 0.1, initial_vec.size)
-        ff_parameter_vector_cp[first_parm_j:last_parm_j]  = ff_parameter_vector_cp[first_parm_i:last_parm_i]
+    grad_score_dict      = {i:list() for i in range(N_trials)}
+    grad_norm_dict       = {i:list() for i in range(N_trials)}
+    allocation_list_dict = list()
+    selection_list_dict  = list()
+    type_list_dict       = list()
 
-        grad_score      = list()
-        grad_norm       = list()
-        allocation_list = list()
-        selection_list  = list()
-        type_list       = list()        
-        for comb_idx in range(N_comb):
-            ff_parameter_vector_cp.allocations[:] = k_values_ij[comb_idx]
-            ff_parameter_vector_cp.apply_changes()
+    for comb_idx in range(N_comb):
+
+        ff_parameter_vector_cp.allocations[:] = k_values_ij[comb_idx]
+        ff_parameter_vector_cp.apply_changes()
+
+        likelihood_func._initialize_systems()
+
+        allocation_list_dict.append(tuple(k_values_ij[comb_idx].tolist()))
+        selection_list_dict.append(tuple(selection_i))
+        type_list_dict.append(tuple([type_i, type_j]))
+
+        for trial_idx in range(N_trials):
+
+            ff_parameter_vector_cp[first_parm_i:last_parm_i]  = initial_vec
+            ff_parameter_vector_cp[first_parm_i:last_parm_i] += np.random.normal(0, 0.1, initial_vec.size)
+            ff_parameter_vector_cp[first_parm_j:last_parm_j]  = ff_parameter_vector_cp[first_parm_i:last_parm_i]
 
             grad = likelihood_func.grad(
                 ff_parameter_vector_cp[:],
@@ -280,19 +284,10 @@ def get_gradient_scores(
                 )
 
             if N_parms == 1:
-                grad_score.append(grad_ij_diff)
+                grad_score_dict[trial_idx].append(grad_ij_diff)
             else:
-                grad_score.append(grad_ij_dot)
-            grad_norm.append([norm_i, norm_j])
-            allocation_list.append(tuple(k_values_ij[comb_idx].tolist()))
-            selection_list.append(tuple(selection_i))
-            type_list.append(tuple([type_i, type_j]))
-
-        grad_score_dict[trial_idx] = grad_score
-        grad_norm_dict[trial_idx]  = grad_norm
-        allocation_list_dict[trial_idx] = allocation_list
-        selection_list_dict[trial_idx] = selection_list
-        type_list_dict[trial_idx]  = type_list
+                grad_score_dict[trial_idx].append(grad_ij_dot)
+            grad_norm_dict[trial_idx].append([norm_i, norm_j])
 
     return grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict
 
@@ -309,7 +304,7 @@ def minimize_FF(
     force_group_idxs=None,
     grad_diff=1.e-2,
     parallel_targets=True,
-    bounds_penalty=1000.,
+    bounds_penalty=10.,
     use_scipy=False,
     verbose=False,
     get_timing=False):
@@ -891,7 +886,7 @@ class BaseOptimizer(object):
         exclude_others = False,
         scale_list = None,
         bounds = None,
-        bounds_penalty = 100.,
+        bounds_penalty = 1.,
         ):
 
         from . import arrays
@@ -1318,6 +1313,7 @@ class BaseOptimizer(object):
         mngr_idx,
         bitvec_type_list,
         system_idx_list,
+        pvec_start=None,
         N_trials_gradient=10,
         split_all=False,
         max_on=0.1,
@@ -1339,6 +1335,9 @@ class BaseOptimizer(object):
             system_idx_list,
             as_copy=False
             )
+        if not isinstance(pvec_start, type(None)):
+            pvec.reset(pvec_start)
+
         N_types = pvec.force_group_count
         if split_all:
             type_query_list = list(range(N_types))
@@ -1690,7 +1689,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 except:
                     failed = True
                 if not failed:
-                    grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict = result
+                    grad_score_dict, grad_norm_dict, allocation_list, selection_list, type_list = result
 
                     score_dict = dict()
                     N_trials = 0
@@ -1698,9 +1697,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                         grad_score = grad_score_dict[trial_idx]
                         grad_norm  = grad_norm_dict[trial_idx]
-                        allocation_list = allocation_list_dict[trial_idx]
-                        selection_list  = selection_list_dict[trial_idx]
-                        type_list  = type_list_dict[trial_idx]
 
                         N_trials += 1
 
@@ -1851,6 +1847,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
                     pvec_idx_min = [mngr_idx_main],
+                    #pvec_idx_min = None,
                     parallel_targets = parallel_targets,
                     bounds_penalty = self.bounds_penalty_list[mngr_idx_main],
                     use_scipy = use_scipy,
@@ -2009,18 +2006,72 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 if self.verbose:
                     print(
+                        "Optimize parameters."
+                        )
+                minimize_initial_worker_id_dict = dict()
+                for sys_idx_pair in system_idx_list_batch:
+                    pvec_list, _ = self.generate_parameter_vectors(
+                        system_idx_list=sys_idx_pair)
+                    worker_id = minimize_FF.remote(
+                        [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                        self.targetcomputer_id,
+                        pvec_list,
+                        list(),
+                        self.bounds_list,
+                        1.)
+                    minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
+
+                if self.verbose:
+                    print(
                         "Generating splits and computing grad scores."
                         )
                 split_worker_id_dict = dict()
-                for mngr_idx in range(self.N_mngr):
-                    for sys_idx_pair in system_idx_list_batch:
-                        split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(
-                            mngr_idx,
-                            self.best_bitvec_type_list[mngr_idx],
-                            sys_idx_pair,
-                            N_trials_gradient=N_trials_gradient,
-                            split_all=True
-                            )
+                worker_id_list = list(minimize_initial_worker_id_dict.keys())
+                while worker_id_list:
+                    worker_id, worker_id_list = ray.wait(
+                        worker_id_list, timeout=_TIMEOUT)
+                    failed = len(worker_id) == 0
+                    if not failed:
+                        try:
+                            _, pvec_list_cp, _ = ray.get(worker_id[0])
+                            sys_idx_pair = minimize_initial_worker_id_dict[worker_id[0]]
+                            del minimize_initial_worker_id_dict[worker_id[0]]
+                            for mngr_idx in range(self.N_mngr):
+                                split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(                                                                   
+                                    mngr_idx,                                                                                                                         
+                                    self.best_bitvec_type_list[mngr_idx],                                                                                             
+                                    sys_idx_pair,                                                                                                                     
+                                    pvec_start=pvec_list_cp[mngr_idx],                                                                                                
+                                    N_trials_gradient=N_trials_gradient,
+                                    split_all=True)
+                        except:
+                            failed = True
+                    if failed:
+                        if len(worker_id) > 0:
+                            if worker_id[0] not in worker_id_list:
+                                worker_id_list.append(worker_id[0])
+                        resubmit_list = retrieve_failed_workers(worker_id_list)
+                        for worker_id in resubmit_list:
+                            sys_idx_pair = minimize_initial_worker_id_dict[worker_id]
+                            del minimize_initial_worker_id_dict[worker_id]
+                            try:
+                                ray.cancel(worker_id)
+                            except:
+                                pass
+                            pvec_list, _ = self.generate_parameter_vectors(
+                                system_idx_list=sys_idx_pair)
+                            worker_id = minimize_FF.remote(
+                                [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                                self.targetcomputer_id,
+                                pvec_list,
+                                list(),
+                                self.bounds_list,
+                                1.,
+                                bounds_penalty=10.) 
+                            minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
+                        worker_id_list = list(minimize_initial_worker_id_dict.keys())
+                        import time
+                        time.sleep(_TIMEOUT)
 
                 if self.verbose:
                     print(
