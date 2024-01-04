@@ -20,7 +20,8 @@ from .constants import (_LENGTH,
                         _FORCE_CONSTANT_ANGLE,
                         _FORCE_CONSTANT_TORSION,
                         _FORCE,
-                        _INACTIVE_GROUP_IDX
+                        _INACTIVE_GROUP_IDX,
+                        _EPSILON
                         )
 
 import ray
