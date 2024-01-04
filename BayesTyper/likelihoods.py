@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env pythonf
 
 # ==============================================================================
 # MODULE DOCSTRING
@@ -13,7 +13,7 @@ import math
 import copy
 import ray
 
-from .constants import _TIMEOUT, _VERBOSE
+from .constants import _TIMEOUT, _VERBOSE, _EPSILON
 from .ray_tools import retrieve_failed_workers
 
 # ==============================================================================
@@ -141,11 +141,10 @@ class LikelihoodVectorized(object):
                             self.openmm_system_bkw_dict[parm_idx].append(bkw_dict)
                             bkw_dict = dict()
 
-                    if not self._three_point:
-                        if sys_fwd.name in self.parm_idx_sysname_dict:
-                            self.parm_idx_sysname_dict[sys_fwd.name].append(parm_idx)
-                        else:
-                            self.parm_idx_sysname_dict[sys_fwd.name] = [parm_idx]
+                    if sys_fwd.name in self.parm_idx_sysname_dict:
+                        self.parm_idx_sysname_dict[sys_fwd.name].append(parm_idx)
+                    else:
+                        self.parm_idx_sysname_dict[sys_fwd.name] = [parm_idx]
 
                 if len(fwd_dict) > 0:
                     self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
@@ -166,13 +165,22 @@ class LikelihoodVectorized(object):
             )
         return np.array(pvec_list)
 
-    def apply_changes(self, vec, grad=True, grad_diff=1.e-2):
+    def apply_changes(
+        self, 
+        vec, 
+        grad=True, 
+        parm_idx_list=None,
+        grad_diff=_EPSILON):
 
         if vec.size != self.N_parms:
             raise ValueError(
                 f"Length of vec is {vec.size} but must be {self.N_parms}"
                 )
 
+        if isinstance(parm_idx_list, type(None)):
+            parm_idx_list = list(range(self.N_parms))
+
+        counts = 0
         for i in range(self._N_pvec):
             pvec       = self.pvec_list[i]
             start_stop = self.pvec_idxs[i]
@@ -180,15 +188,17 @@ class LikelihoodVectorized(object):
             pvec.apply_changes()
             if grad:
                 for j in range(pvec.size):
-                    pvec_fwd = self.pvec_list_fwd[i][j]
-                    pvec_fwd[:] = vec[start_stop[0]:start_stop[1]]
-                    pvec_fwd[j] += grad_diff
-                    pvec_fwd.apply_changes()
-                    if self._three_point:
-                        pvec_bkw = self.pvec_list_bkw[i][j]
-                        pvec_bkw[:] = vec[start_stop[0]:start_stop[1]]
-                        pvec_bkw[j] -= grad_diff
-                        pvec_bkw.apply_changes()
+                    if j in parm_idx_list:
+                        pvec_fwd = self.pvec_list_fwd[i][j]
+                        pvec_fwd[:] = vec[start_stop[0]:start_stop[1]]
+                        pvec_fwd[j] += grad_diff
+                        pvec_fwd.apply_changes()
+                        if self._three_point:
+                            pvec_bkw = self.pvec_list_bkw[i][j]
+                            pvec_bkw[:] = vec[start_stop[0]:start_stop[1]]
+                            pvec_bkw[j] -= grad_diff
+                            pvec_bkw.apply_changes()
+                    counts += 1
 
     def _results_dict_to_likelihood(self, results_dict_all):
 
@@ -249,7 +259,7 @@ class LikelihoodVectorized(object):
         self, 
         vec, 
         parm_idx_list=None,
-        grad_diff=1.e-2, 
+        grad_diff=_EPSILON, 
         use_jac=False,
         ):
 
@@ -269,48 +279,18 @@ class LikelihoodVectorized(object):
                 continue
             for sys_idx, openmm_system_dict in enumerate(self.openmm_system_fwd_dict[parm_idx]):
                 worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                worker_id_dict[worker_id] = parm_idx, 1., sys_idx
+                worker_id_dict[worker_id] = [parm_idx], 1., sys_idx
             if self._three_point:
                 for sys_idx, openmm_system_dict in enumerate(self.openmm_system_bkw_dict[parm_idx]):
                     worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                    worker_id_dict[worker_id] = parm_idx, -1., sys_idx
+                    worker_id_dict[worker_id] = [parm_idx], -1., sys_idx
+        if not self._three_point:
+            for sysname in self.openmm_system_dict:
+                worker_id = self.targetcomputer.__call__({sysname:self.openmm_system_dict[sysname]}, False)
+                _parm_idx_list = self.parm_idx_sysname_dict[sysname]
+                worker_id_dict[worker_id] = _parm_idx_list, -1., sysname
 
         grad = np.zeros(self.N_parms, dtype=float)
-        if not self._three_point:
-            worker_id_dict_logL = {
-                self.targetcomputer.__call__({key:value}, False) : key for key, value in self.openmm_system_dict.items()
-                }
-            worker_id_list = list(worker_id_dict_logL.keys())
-            while worker_id_list:
-                worker_id, worker_id_list = ray.wait(
-                    worker_id_list, timeout=_TIMEOUT)
-                failed = len(worker_id) == 0
-                if not failed:
-                    try:
-                        _logP_likelihood = ray.get(
-                            worker_id[0], timeout=_TIMEOUT)
-                    except:
-                        failed = True
-                    if not failed:
-                        sysname = worker_id_dict_logL[worker_id[0]]
-                        parm_idx_list = self.parm_idx_sysname_dict[sysname]
-                        for parm_idx in parm_idx_list:
-                            grad[parm_idx] -= _logP_likelihood
-                        del worker_id_dict_logL[worker_id[0]]
-                if failed:
-                    if len(worker_id) > 0:
-                        if worker_id[0] not in worker_id_list:
-                            worker_id_list.append(worker_id[0])
-                    resubmit_list = retrieve_failed_workers(worker_id_list)
-                    for worker_id in resubmit_list:
-                        key = worker_id_dict_logL[worker_id]
-                        ray.cancel(worker_id, force=True)
-                        del worker_id_dict_logL[worker_id]
-                        value = self.openmm_system_dict[key]
-                        worker_id = self.targetcomputer.__call__({key:value}, False)
-                        worker_id_dict_logL[worker_id] = key
-                    worker_id_list = list(worker_id_dict_logL.keys())
-
         worker_id_list = list(worker_id_dict.keys())
         while worker_id_list:
             worker_id, worker_id_list = ray.wait(
@@ -323,8 +303,10 @@ class LikelihoodVectorized(object):
                 except:
                     failed = True
                 if not failed:
-                    parm_idx, sign, sys_idx = worker_id_dict[worker_id[0]]
-                    grad[parm_idx] += sign * _logP_likelihood
+                    _parm_idx_list, sign, sys_idx = worker_id_dict[worker_id[0]]
+                    for parm_idx in parm_idx_list:
+                        if parm_idx in _parm_idx_list:
+                            grad[parm_idx] += sign * _logP_likelihood
                     del worker_id_dict[worker_id[0]]
             if failed:
                 if len(worker_id) > 0:
@@ -335,11 +317,18 @@ class LikelihoodVectorized(object):
                     ray.cancel(worker_id, force=True)
                     parm_idx, sign, sys_idx = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
-                    if sign > 0.:
-                        openmm_system_dict = self.openmm_system_fwd_dict[parm_idx][sys_idx]
+                    if isinstance(sys_idx, int):
+                        if sign > 0.:
+                            openmm_system_dict = self.openmm_system_fwd_dict[parm_idx[0]][sys_idx]
+                        else:
+                            openmm_system_dict = self.openmm_system_bkw_dict[parm_idx[0]][sys_idx]
+                        worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
                     else:
-                        openmm_system_dict = self.openmm_system_bkw_dict[parm_idx][sys_idx]
-                    worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
+                        sysname = sys_idx
+                        worker_id = self.targetcomputer.__call__({sysname:self.openmm_system_dict[sysname]}, False)
+                        _parm_idx_list = self.parm_idx_sysname_dict[sysname]
+                        worker_id_dict[worker_id] = _parm_idx_list, -1., sysname
+
                     worker_id_dict[worker_id] = parm_idx, sign, sys_idx
                 worker_id_list = list(worker_id_dict.keys())
 
