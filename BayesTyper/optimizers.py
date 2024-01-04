@@ -21,7 +21,9 @@ from .constants import (_LENGTH,
                         _FORCE,
                         _INACTIVE_GROUP_IDX,
                         _TIMEOUT,
-                        _VERBOSE
+                        _VERBOSE,
+                        _EPSILON,
+                        _EPSILON_GS
                         )
 from .ray_tools import retrieve_failed_workers
 
@@ -191,7 +193,7 @@ def get_gradient_scores(
     type_i, # type to be split
     selection_i = None,
     k_values_ij = None,
-    grad_diff = 1.e-2,
+    grad_diff = _EPSILON_GS,
     N_trials = 10,
     ):
 
@@ -224,7 +226,7 @@ def get_gradient_scores(
 
     likelihood_func = LikelihoodVectorized(
         [ff_parameter_vector_cp],
-        targetcomputer
+        targetcomputer,
         )
 
     initial_vec = copy.deepcopy(ff_parameter_vector_cp[first_parm_i:last_parm_i])
@@ -248,8 +250,8 @@ def get_gradient_scores(
 
         for trial_idx in range(N_trials):
 
-            ff_parameter_vector_cp[first_parm_i:last_parm_i]  = initial_vec
-            ff_parameter_vector_cp[first_parm_i:last_parm_i] += np.random.normal(0, 0.1, initial_vec.size)
+            ff_parameter_vector_cp[first_parm_i:last_parm_i]  = initial_vec[:]
+            ff_parameter_vector_cp[first_parm_i:last_parm_i] += np.random.normal(0, 0.01, initial_vec.size)
             ff_parameter_vector_cp[first_parm_j:last_parm_j]  = ff_parameter_vector_cp[first_parm_i:last_parm_i]
 
             grad = likelihood_func.grad(
@@ -302,10 +304,11 @@ def minimize_FF(
     parm_penalty,
     pvec_idx_min=None,
     force_group_idxs=None,
-    grad_diff=1.e-2,
+    grad_diff=_EPSILON,
     parallel_targets=True,
     bounds_penalty=10.,
-    use_scipy=False,
+    use_scipy=True,
+    use_DE=False,
     verbose=False,
     get_timing=False):
     
@@ -314,6 +317,7 @@ def minimize_FF(
         time_start = time.time()
 
     from openmm import unit
+    from . import priors
     import numpy as np
     import copy
 
@@ -334,6 +338,8 @@ def minimize_FF(
         N_parms_all += pvec.size
 
     excluded_parameter_idx_list = list()
+    prior_idx_list = list()
+    N_parms = 0
     for pvec_idx in pvec_idx_list:
 
         pvec = pvec_list_cp[pvec_idx]
@@ -365,8 +371,23 @@ def minimize_FF(
         pvec.apply_changes()
 
         bounds = bounds_list[pvec_idx]
-        if not isinstance(bounds, type(None)):
+        N = pvec.force_group_count
+        M = pvec.parameters_per_force_group
+        if isinstance(bounds, priors.BaseBounds):
             bounds.apply_pvec(pvec)
+            N = pvec.force_group_count
+            M = pvec.parameters_per_force_group
+            if isinstance(bounds, (priors.AngleBounds, priors.BondBounds)):
+                for i in range(0,N*M,2):
+                    ### We only want to consider the
+                    ### equilibrium bond lengths and angles
+                    prior_idx_list.append(i+1+N_parms)
+            else:
+                for i in range(0,N*M):
+                    ### We want to consider all Amplitudes
+                    prior_idx_list.append(i+N_parms)
+                    
+        N_parms += pvec.size
 
     likelihood_func = LikelihoodVectorized(
         pvec_min_list,
@@ -378,7 +399,7 @@ def minimize_FF(
 
     def penalty(x):
 
-        penalty_val = np.sum(x**2)
+        penalty_val = np.sum(x[prior_idx_list]**2)
         if excluded_parameter_idx_list:
             penalty_val -= np.sum(x[excluded_parameter_idx_list]**2)
         penalty_val *= bounds_penalty
@@ -393,13 +414,14 @@ def minimize_FF(
 
         likelihood = likelihood_func(x)
         AIC_score  = 2. * N_parms_all * parm_penalty - 2. * likelihood
-
+        
         return AIC_score
 
     def grad_penalty(x):
 
-        grad = bounds_penalty * 2. * x
-
+        grad = np.zeros_like(x)
+        grad[prior_idx_list] = bounds_penalty * 2. * x[prior_idx_list]
+        
         ### Make sure we only use values from relevant
         ### force groups.
         if excluded_parameter_idx_list:
@@ -412,7 +434,7 @@ def minimize_FF(
         if excluded_parameter_idx_list:
             x[excluded_parameter_idx_list] = x0_ref[excluded_parameter_idx_list]
 
-        _grad = likelihood_func.grad(x, use_jac=False)
+        _grad = likelihood_func.grad(x, grad_diff=grad_diff, use_jac=False)
         ### Multiply by -2. due to AIC definition
         _grad *= -2.
 
@@ -434,19 +456,19 @@ def minimize_FF(
                 "Initial func value:",
                 _fun(x0),
                 )
-
-        result = optimize.minimize(
-            _fun, 
-            x0, 
-            jac = _grad, 
-            #method = "Newton-CG",
-            method = "BFGS",
-            )
-        #from scipy.optimize import differential_evolution
-        #result = differential_evolution(
-        #    _fun,
-        #    [(-10,10) for _ in x0]
-        #    )
+                
+        if use_DE:
+            result = optimize.differential_evolution(
+               _fun,
+               [(-10,10) for _ in x0])
+        
+        else:
+            result = optimize.minimize(
+                _fun, 
+                x0, 
+                jac = _grad, 
+                #method = "Newton-CG",
+                method = "BFGS")
         
         best_x = result.x
         likelihood_func.apply_changes(best_x)
@@ -781,8 +803,7 @@ def set_parameters_remote(
             resubmit_list = retrieve_failed_workers(worker_id_list)
             for worker_id in resubmit_list:
                 args = worker_id_dict[worker_id]
-                (ast, _system_list_id, _targetcomputer_id, _pvec_all_id, _bitvec_type_list_id, _bounds_list, _parm_penalty_split, _mngr_idx_main, _bounds_penalty, _system_idx_list) = args
-                
+                ast, _system_list_id, _targetcomputer_id, _pvec_all_id, _bitvec_type_list_id, _bounds_list, _parm_penalty_split, _mngr_idx_main, _bounds_penalty, _system_idx_list = args
                 try:
                     ray.cancel(worker_id)
                 except:
@@ -850,7 +871,8 @@ class BaseOptimizer(object):
         self.system_list = system_list
         self._N_systems  = len(system_list)
 
-        self.grad_diff = 1.e-2
+        self.grad_diff = _EPSILON
+        self.grad_diff_gs = _EPSILON_GS
 
         ### Note, don't make this too small.
         ### not finding the correct splits
@@ -1442,9 +1464,10 @@ class BaseOptimizer(object):
                     type_i = type_i,
                     selection_i = selection_i,
                     k_values_ij = k_values_ij[split_idxs],
-                    grad_diff = self.grad_diff,
+                    grad_diff = self.grad_diff_gs,
+                    N_trials = N_trials_gradient,
                     )
-                args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, mngr_idx, system_idx_list)
+                args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, mngr_idx, system_idx_list)
                 worker_id_dict[worker_id] = args
 
         return worker_id_dict, alloc_bitvec_degeneracy_dict
@@ -1679,6 +1702,10 @@ class ForceFieldOptimizer(BaseOptimizer):
         alloc_bitvec_dict = dict()
 
         worker_id_list = list(worker_id_dict.keys())
+
+        score_dict  = dict()
+        counts_dict = dict()
+        
         while worker_id_list:
             worker_id, worker_id_list = ray.wait(
                 worker_id_list, timeout=_TIMEOUT)
@@ -1691,14 +1718,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                 if not failed:
                     grad_score_dict, grad_norm_dict, allocation_list, selection_list, type_list = result
 
-                    score_dict = dict()
-                    N_trials = 0
                     for trial_idx in grad_score_dict:
 
                         grad_score = grad_score_dict[trial_idx]
                         grad_norm  = grad_norm_dict[trial_idx]
-
-                        N_trials += 1
 
                         for g, n, a, s, t in zip(grad_score, grad_norm, allocation_list, selection_list, type_list):
                             ### Only use this split, when the norm
@@ -1718,32 +1741,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     g  = _g
                                 if ast in score_dict:
                                     score_dict[ast] += g
+                                    counts_dict[ast] += 1
                                 else:
                                     score_dict[ast] = g
+                                    counts_dict[ast] = 1
 
-                    for ast in score_dict:
-                        score_dict[ast] /= N_trials
-
-                    ### Sort dictionaries
-                    if low_to_high:
-                        ### For split: small values favored, i.e. small values first
-                        score_list  = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
-                    else:
-                        ### For merge: high values favored, i.e. high values first
-                        score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=True)]
-
-                    #for ast_i, ast in enumerate(score_list):
-                    #    votes_dict[ast] = 1
-
-                    ### Gather the three best (a,s,t) combinations
-                    ### and gather votes.
-                    ### Best one gets 3 votes, second 2 votes and third 1 vote
-                    for ast_i, ast in enumerate(score_list[:3]):
-                        if ast in votes_dict:
-                            votes_dict[ast] += (3-ast_i)
-                        else:
-                            votes_dict[ast] = (3-ast_i)
-                
                     del worker_id_dict[worker_id[0]]
 
             if failed:
@@ -1755,7 +1757,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     args = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
                     ray.cancel(worker_id, force=True)
-                    _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _mngr_idx, _system_idx_list = args
+                    _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _mngr_idx, _system_idx_list = args
                     worker_id = get_gradient_scores.remote(
                         ff_parameter_vector = _pvec_id,
                         targetcomputer = _targetcomputer_id,
@@ -1763,19 +1765,30 @@ class ForceFieldOptimizer(BaseOptimizer):
                         selection_i = _selection_i,
                         k_values_ij = _k_values_ij,
                         grad_diff = _grad_diff,
+                        N_trials = _N_trials,
                         )
-                    args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _mngr_idx, _system_idx_list
+                    args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _mngr_idx, _system_idx_list
                     worker_id_dict[worker_id] = args
-                worker_id_list = list(worker_id_dict.keys())
                 import time
                 time.sleep(_TIMEOUT)
+                worker_id_list = list(worker_id_dict.keys())
+
+        for ast in score_dict:
+            score_dict[ast] /= counts_dict[ast]
+
+        ### Sort dictionaries
+        if low_to_high:
+            ### For split: small values favored, i.e. small values first
+            score_list  = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
+        else:
+            ### For merge: high values favored, i.e. high values first
+            score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=True)]
 
         ### Only keep the final best `keep_N_best` ast
-        votes_list = [ast for ast, _ in sorted(votes_dict.items(), key=lambda items: items[1], reverse=True)]
-        if len(votes_list) > keep_N_best:
-            votes_list = votes_list[:keep_N_best]
+        if len(score_list) > keep_N_best:
+            score_list = score_list[:keep_N_best]
 
-        return votes_list
+        return score_list
 
 
     def get_min_scores(
@@ -1994,7 +2007,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     self.targetcomputer_id
                                     )
                                 worker_id_dict[worker_id] = sys_idx_pair
-                            worker_id_list = list(worker_id_dict.keys())
+                        worker_id_list = list(worker_id_dict.keys())
 
                     system_idx_list_batch = [sys_idx_pair for sys_idx_pair, _ in sorted(time_diff_dict.items(), key=lambda items: items[1], reverse=True)]
                     system_idx_list_batch = tuple(system_idx_list_batch)
@@ -2018,7 +2031,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                         pvec_list,
                         list(),
                         self.bounds_list,
-                        1.)
+                        1.,
+                        use_DE=True,
+                        bounds_penalty=10.)
                     minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
                 if self.verbose:
@@ -2067,11 +2082,12 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 list(),
                                 self.bounds_list,
                                 1.,
+                                use_DE=True,
                                 bounds_penalty=10.) 
                             minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
-                        worker_id_list = list(minimize_initial_worker_id_dict.keys())
                         import time
                         time.sleep(_TIMEOUT)
+                        worker_id_list = list(minimize_initial_worker_id_dict.keys())
 
                 if self.verbose:
                     print(
@@ -2147,11 +2163,12 @@ class ForceFieldOptimizer(BaseOptimizer):
                             selection_worker_id_list, timeout=_TIMEOUT)
                         failed = len(worker_id) == 0
                         if not failed:
-                            try:
-                                _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
-                                    worker_id[0], timeout=_TIMEOUT)
-                            except:
-                                failed = True
+                            #try:
+                            #    _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                            #        worker_id[0], timeout=_TIMEOUT)
+                            #except:
+                            #    failed = True
+                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(worker_id[0], timeout=_TIMEOUT)
                             if not failed:
                                 sys_idx_pair = selection_worker_id_dict[worker_id[0]]
                                 if self.verbose:
