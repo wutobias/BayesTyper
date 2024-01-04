@@ -1122,14 +1122,16 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         if force_group_idx == -1:
             force_group_idx = self.force_group_count - 1
 
-        ### Note: Must call add_force_group() before set_parameter()
-        value_list = self.get_parameters_by_force_group(
-            force_group_idx, 
-            get_all_parms=False
-            )
+        v0 = self._vector_0.vector_values * self._vector_units
+        parm_1 = force_group_idx * self.parameters_per_force_group
+        parm_2 = parm_1 + self.parameters_per_force_group
         self.add_force_group(
-            copy.deepcopy(value_list)
-            )
+            copy.deepcopy(v0[parm_1:parm_2]))
+
+        force_group_idx = self.force_group_count - 1
+        _parm_1 = force_group_idx * self.parameters_per_force_group
+        _parm_2 = _parm_1 + self.parameters_per_force_group
+        self[_parm_1:_parm_2] = self[parm_1:parm_2]
 
 
     def remove(self, force_group_idx):
