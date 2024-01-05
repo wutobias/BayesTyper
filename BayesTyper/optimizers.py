@@ -460,7 +460,8 @@ def minimize_FF(
         if use_DE:
             result = optimize.differential_evolution(
                _fun,
-               [(-10,10) for _ in x0])
+               [(-1,1) for _ in x0],
+               maxiter=100,)
         
         else:
             result = optimize.minimize(
@@ -1690,6 +1691,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         low_to_high=True,
         abs_grad_score=False,
         norm_cutoff=0.,
+        grad_cutoff=-0.5,
         keep_N_best=10,
         ):
 
@@ -1704,6 +1706,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         worker_id_list = list(worker_id_dict.keys())
 
         score_dict  = dict()
+        norm_dict   = dict()
         counts_dict = dict()
         
         while worker_id_list:
@@ -1732,19 +1735,19 @@ class ForceFieldOptimizer(BaseOptimizer):
                             #    )
 
                             ast = a,s,t
-                            if np.all(np.abs(n) < norm_cutoff):
-                                pass
+                            ### Only consider the absolute value of the gradient score, not the sign
+                            if abs_grad_score:
+                                _g = [abs(gg) for gg in g]
+                                g  = _g
+                            if ast in score_dict:
+                                score_dict[ast]   += g
+                                counts_dict[ast]  += 1
+                                norm_dict[ast][0] += abs(n[0])
+                                norm_dict[ast][1] += abs(n[1])
                             else:
-                                ### Only consider the absolute value of the gradient score, not the sign
-                                if abs_grad_score:
-                                    _g = [abs(gg) for gg in g]
-                                    g  = _g
-                                if ast in score_dict:
-                                    score_dict[ast] += g
-                                    counts_dict[ast] += 1
-                                else:
-                                    score_dict[ast] = g
-                                    counts_dict[ast] = 1
+                                score_dict[ast]  = g
+                                counts_dict[ast] = 1
+                                norm_dict[ast]   = [abs(n[0]), abs(n[1])]
 
                     del worker_id_dict[worker_id[0]]
 
@@ -1773,16 +1776,30 @@ class ForceFieldOptimizer(BaseOptimizer):
                 time.sleep(_TIMEOUT)
                 worker_id_list = list(worker_id_dict.keys())
 
+        to_delete = list()
         for ast in score_dict:
-            score_dict[ast] /= counts_dict[ast]
+            score_dict[ast]   /= counts_dict[ast]
+            norm_dict[ast][0] /= counts_dict[ast]
+            norm_dict[ast][1] /= counts_dict[ast]
+            if norm_dict[ast][0] < norm_cutoff and norm_dict[ast][1] < norm_cutoff:
+                to_delete.append(ast)
+            else:
+                if low_to_high:
+                    if score_dict[ast] > grad_cutoff:
+                        to_delete.append(ast)
+                else:
+                    if score_dict[ast] < grad_cutoff:
+                        to_delete.append(ast)
 
+        for ast in to_delete:
+            del score_dict[ast]
+        
         ### Sort dictionaries
-        if low_to_high:
+        ### For merge: high values favored, i.e. high values first
+        score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
+        if not low_to_high:
             ### For split: small values favored, i.e. small values first
-            score_list  = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
-        else:
-            ### For merge: high values favored, i.e. high values first
-            score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=True)]
+            score_list = score_list[::-1]
 
         ### Only keep the final best `keep_N_best` ast
         if len(score_list) > keep_N_best:
@@ -2033,7 +2050,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         self.bounds_list,
                         1.,
                         use_DE=True,
-                        bounds_penalty=10.)
+                        bounds_penalty=1.)
                     minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
                 if self.verbose:
