@@ -2,7 +2,112 @@ import ray
 from .constants import _TIMEOUT, _VERBOSE
 from .ray_tools import retrieve_failed_workers
 
-def get_primitives(rdmol_list, smarts_dict, atom_idx_list):
+
+class BaseBitvectorContainer:
+
+    def __init__(self):
+
+        self.rdmol_list      = list()
+        self.atom_list       = list()
+        self.force_ranks     = list()
+        self.system_idx_list = list()
+
+        self._generate()
+
+        self.N_allocs = 0
+        self.N_atoms  = 0
+
+    def _generate(self):
+
+        pass
+
+
+class BondBitvectorContainer(BaseBitvectorContainer):
+
+    def __init__(self):
+
+        super().__init__()
+
+        self.N_allocs = len(self.atom_list)
+        self.N_atoms  = len(self.atom_list[0])
+
+    def _generate(self):
+
+        from rdkit import Chem
+
+        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        bond_list = ["-", "=", "#", ":"]
+        counts    = 0
+
+        sma_list = list()
+        for i, a1 in enumerate(atom_list):
+            for a2 in atom_list[i:]:
+                for b in bond_list:
+                    if a1 == "#1" or a2 == "#1":
+                        if b != "-":
+                            continue
+                    sma = f"[{a1}]{b}[{a2}]"
+                    if sma not in sma_list:
+                        sma_list.append(sma)
+                        rdmol = Chem.MolFromSmarts(sma)
+                        self.rdmol_list.append(rdmol)
+                        self.atom_list.append(
+                            [0,1])
+                        self.force_ranks.append(counts)
+                        self.system_idx_list.append(counts)
+    
+                        counts += 1
+
+
+class AngleBitvectorContainer(BaseBitvectorContainer):
+
+    def __init__(self):
+
+        super().__init__()
+
+        self.N_allocs = len(self.atom_list)
+        self.N_atoms  = len(self.atom_list[0])
+
+    def _generate(self):
+
+        from rdkit import Chem
+
+        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        bond_list = ["-", "=", "#", ":"]
+        counts    = 0
+
+        sma_list = list()
+        for a1 in atom_list:
+            for a2 in atom_list:
+                for a3 in atom_list:
+                    for b1 in bond_list:
+                        for b2 in bond_list:
+                            sma1 = f"[{a1}]{b1}[{a2}]{b2}[{a3}]"
+                            sma2 = f"[{a3}]{b2}[{a2}]{b1}[{a1}]"
+                            if sma1 in sma_list:
+                                continue
+                            if sma2 in sma_list:
+                                continue
+                            if a2 == "#1":
+                                continue
+                            if "=" in [b1, b2] and "#" in [b1, b2]:
+                                continue
+                            if a1 == "#1" and b1 != "-":
+                                continue
+                            if a3 == "#1" and b2 != "-":
+                                continue
+                            sma_list.append(sma1)
+                            rdmol = Chem.MolFromSmarts(sma1)
+                            self.rdmol_list.append(rdmol)
+                            self.atom_list.append(
+                                [0,1,2])
+                            self.force_ranks.append(counts)
+                            self.system_idx_list.append(counts)
+
+                            counts += 1
+
+
+def get_primitives(rdmol_list, smarts_dict, atom_idx_list, query_query_matches=False):
 
     from rdkit import Chem
     import numpy as np
@@ -13,7 +118,7 @@ def get_primitives(rdmol_list, smarts_dict, atom_idx_list):
         for rdmol in rdmol_list:
             matches = rdmol.GetSubstructMatches(
                 smarts_dict[key],
-                useQueryQueryMatches=False,
+                useQueryQueryMatches=query_query_matches,
                 uniquify=False,
             )
             if len(matches) > 0:
@@ -300,28 +405,31 @@ class BitSmartsManager(object):
     bond_ring = ["@"]
     bond_aromatic = [":"]
 
-    atom_primitives_smarts  = atom_smarts[:]
-    atom_primitives_smarts += charge_smarts[:]
-    atom_primitives_smarts += aromatic_smarts[:]
-    atom_primitives_smarts += hydrogen_smarts[:]
-    atom_primitives_smarts += conn_smarts[:]
-    atom_primitives_smarts += ring_smarts[:]
-    
-    bond_primitives_smarts  = bond_type[:]
-    bond_primitives_smarts += bond_ring[:]
-    bond_primitives_smarts += bond_aromatic[:]
-
-    all_primitives_smarts  = atom_primitives_smarts[:]
-    all_primitives_smarts += bond_primitives_smarts[:]
-
     def __init__(self, 
                  parameter_manager, 
                  parent_smarts = None, 
-                 max_neighbor = 3
-                ):
+                 max_neighbor = 3):
+
+        atom_primitives_smarts  = self.atom_smarts[:]
+        atom_primitives_smarts += self.charge_smarts[:]
+        atom_primitives_smarts += self.aromatic_smarts[:]
+        atom_primitives_smarts += self.hydrogen_smarts[:]
+        atom_primitives_smarts += self.conn_smarts[:]
+        atom_primitives_smarts += self.ring_smarts[:]
+
+        bond_primitives_smarts  = self.bond_type[:]
+        bond_primitives_smarts += self.bond_ring[:]
+        bond_primitives_smarts += self.bond_aromatic[:]
+
+        all_primitives_smarts  = atom_primitives_smarts[:]
+        all_primitives_smarts += bond_primitives_smarts[:]
 
         ### By default
         use_neg = False
+
+        self._use_query_query_matches = False
+        if isinstance(parameter_manager, BaseBitvectorContainer):
+            self._use_query_query_matches = True
         
         from rdkit import Chem
         import numpy as np
@@ -345,11 +453,12 @@ class BitSmartsManager(object):
         assert max_neighbor <= 3
         assert max_neighbor > -1
 
-        self.all_primitives_smarts += [parent_smarts][:]
+        
+        all_primitives_smarts += [parent_smarts][:]
 
-        self.atom_primitives_smarts = np.array(self.atom_primitives_smarts)
-        self.bond_primitives_smarts = np.array(self.bond_primitives_smarts)
-        self.all_primitives_smarts  = np.array(self.all_primitives_smarts)
+        self.atom_primitives_smarts = np.array(atom_primitives_smarts)
+        self.bond_primitives_smarts = np.array(bond_primitives_smarts)
+        self.all_primitives_smarts  = np.array(all_primitives_smarts)
 
         self.N_atoms = parameter_manager.N_atoms
 
@@ -556,8 +665,8 @@ class BitSmartsManager(object):
             self.smarts_dict,
             np.append(
                 self.atom_idx_list_parents,
-                -1
-            )
+                -1),
+            query_query_matches = self._use_query_query_matches
         )
 
         for sys_idx in range(len(self.rdmol_list)):
