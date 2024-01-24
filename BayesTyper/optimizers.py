@@ -388,10 +388,6 @@ def minimize_FF(
     x0 = copy.deepcopy(likelihood_func.pvec[:])
     x0_ref = copy.deepcopy(likelihood_func.pvec[:])
 
-    print(
-        "parm_idx_list",
-        parm_idx_list)
-
     def penalty(x):
 
         penalty_val = np.sum(x[prior_idx_list]**2)
@@ -944,6 +940,8 @@ class BaseOptimizer(object):
                 bvc = bitvector_typing.BondBitvectorContainer()
             elif isinstance(parameter_manager, parameters.AngleManager):
                 bvc = bitvector_typing.AngleBitvectorContainer()
+            elif isinstance(parameter_manager, (parameters.ProperTorsionManager, parameters.MultiProperTorsionManager)):
+                bvc = bitvector_typing.ProperTorsionBitvectorContainer()
             else:
                 bvc = 0
             if bvc != 0:
