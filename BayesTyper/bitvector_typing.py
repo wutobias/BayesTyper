@@ -13,6 +13,7 @@ class BaseBitvectorContainer:
         self.system_idx_list = list()
 
         self._generate()
+        self._sort()
 
         self.N_allocs = 0
         self.N_atoms  = 0
@@ -20,6 +21,38 @@ class BaseBitvectorContainer:
     def _generate(self):
 
         pass
+
+    def _sort(self):
+
+        ### Get counts of wildcards (bonds/atoms)
+        count_dict = dict()
+        for sys_idx, rdmol in enumerate(self.rdmol_list):
+            wild_card_count = 0
+            for atom in rdmol.GetAtoms():
+                sma = atom.GetSmarts()
+                if "*" in sma:
+                    wild_card_count +=1
+            for bond in rdmol.GetBonds():
+                sma = bond.GetSmarts()
+                if "~" in sma:
+                    wild_card_count +=1
+            count_dict[sys_idx] = wild_card_count
+
+        _rdmol_list      = list()
+        _atom_list       = list()
+        _force_ranks     = list()
+        _system_idx_list = list()        
+        ### Order everything in descending order
+        for sys_idx, _ in sorted(count_dict.items(), key=lambda x: x[1], reverse=True):
+            _rdmol_list.append(self.rdmol_list[sys_idx])
+            _atom_list.append(self.atom_list[sys_idx])
+            _force_ranks.append(self.force_ranks[sys_idx])
+            _system_idx_list.append(self.system_idx_list[sys_idx])
+
+        self.rdmol_list      = _rdmol_list
+        self.atom_list       = _atom_list
+        self.force_ranks     = _force_ranks
+        self.system_idx_list = _system_idx_list
 
 
 class BondBitvectorContainer(BaseBitvectorContainer):
