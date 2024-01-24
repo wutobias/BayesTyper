@@ -921,21 +921,26 @@ class BaseOptimizer(object):
 
         bsm, bitvec_list_alloc_dict = self.generate_bitsmartsmanager(
             self.N_mngr-1,
-            max_neighbor=3
-            )
+            max_neighbor=3)
 
         self.best_pvec_list.append(None)
 
         ### This adds [*:1]~[*:2] as initial bitvector
         self.best_bitvec_type_list.append(
-            [0])
+            list())
 
         [pvec], _ = self.generate_parameter_vectors(
             mngr_idx_list=[self.N_mngr-1]
             )
 
         if rich_types:
+            import copy
+            _bond_ring = copy.deepcopy(
+                bitvector_typing.BitSmartsManager.bond_ring)
+            _bond_aromatic = copy.deepcopy(
+                bitvector_typing.BitSmartsManager.bond_aromatic)
             bitvector_typing.BitSmartsManager.bond_ring = []
+            bitvector_typing.BitSmartsManager.bond_aromatic = []
             if isinstance(parameter_manager, parameters.BondManager):
                 bvc = bitvector_typing.BondBitvectorContainer()
             elif isinstance(parameter_manager, parameters.AngleManager):
@@ -947,16 +952,25 @@ class BaseOptimizer(object):
             if bvc != 0:
                 _bsm = bitvector_typing.BitSmartsManager(bvc, max_neighbor=3)
                 _bsm.generate(ring_safe=True)
-                _bitvec_list, _ = _bsm.prepare_bitvectors(max_neighbor=3)
+                _, _bitvec_list_alloc_dict = _bsm.prepare_bitvectors(max_neighbor=3)
+                alloc_dict, smarts_dict, on_dict, subset_dict, bitvec_dict = _bsm.and_rows(
+                    max_iter=0, generate_smarts=True)
+                on_dict_sorted = sorted(on_dict.items(), key= lambda x: x[1])
                 bitvec_list = list()
-                for b in _bitvec_list:
-                    sma = _bsm.bitvector_to_smarts(b)
-                    bitvec_list.append(b)
+                for idx, _ in on_dict_sorted:
+                    bitvec_list.append(
+                        bitvec_dict[idx])
                 allocations = [-1 for _ in pvec.allocations]
                 bitvector_typing.bitvec_hierarchy_to_allocations(
                     bitvec_list_alloc_dict,
                     bitvec_list,
                     allocations)
+                counts = 0
+                for type_i, b in enumerate(bitvec_list):
+                    if type_i in allocations:
+                        if counts > 0:
+                            pvec.duplicate(0)
+                        counts += 1
                 N_parms = pvec.parameters_per_force_group
                 for type_i, b in enumerate(bitvec_list):
                     if type_i in allocations:
@@ -965,7 +979,6 @@ class BaseOptimizer(object):
                             print(
                                 f"Adding initial type {sma}")
                         self.best_bitvec_type_list[-1].append(b)
-                        pvec.duplicate(0)
                         counts = pvec.force_group_count - 1
                         pvec[N_parms*counts:N_parms*(counts+1)] += np.random.normal(size=N_parms)
                 allocations = [-1 for _ in pvec.allocations]
@@ -975,6 +988,12 @@ class BaseOptimizer(object):
                     allocations)
                 pvec.allocations[:] = allocations[:]
                 pvec.apply_changes()
+
+            bitvector_typing.BitSmartsManager.bond_ring = _bond_ring
+            bitvector_typing.BitSmartsManager.bond_aromatic = _bond_aromatic
+
+        else:
+            self.best_bitvec_type_list[-1].append(0)
 
         self.best_pvec_list[-1] = pvec.copy()
 
