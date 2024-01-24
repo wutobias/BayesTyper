@@ -106,6 +106,42 @@ class AngleBitvectorContainer(BaseBitvectorContainer):
 
                             counts += 1
 
+class ProperTorsionBitvectorContainer(BaseBitvectorContainer):
+
+    def __init__(self):
+
+        super().__init__()
+
+        self.N_allocs = len(self.atom_list)
+        self.N_atoms  = len(self.atom_list[0])
+
+    def _generate(self):
+
+        from rdkit import Chem
+
+        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        bond_list = ["-", "=", "#", ":"]
+        counts    = 0
+
+        sma_list = list()
+        for i, a1 in enumerate(atom_list):
+            for a2 in atom_list[i:]:
+                for b in bond_list:
+                    if a1 == "#1" or a2 == "#1":
+                        if b != "-":
+                            continue
+                    sma = f"[*]~[{a1}]{b}[{a2}]~[*]"
+                    if sma not in sma_list:
+                        sma_list.append(sma)
+                        rdmol = Chem.MolFromSmarts(sma)
+                        self.rdmol_list.append(rdmol)
+                        self.atom_list.append(
+                            [0,1,2,3])
+                        self.force_ranks.append(counts)
+                        self.system_idx_list.append(counts)
+
+                        counts += 1
+
 
 def get_primitives(rdmol_list, smarts_dict, atom_idx_list, query_query_matches=False):
 
@@ -666,8 +702,7 @@ class BitSmartsManager(object):
             np.append(
                 self.atom_idx_list_parents,
                 -1),
-            query_query_matches = self._use_query_query_matches
-        )
+            query_query_matches = self._use_query_query_matches)
 
         for sys_idx in range(len(self.rdmol_list)):
             valids = np.where(self.sysidx_list == sys_idx)[0]
@@ -687,8 +722,32 @@ class BitSmartsManager(object):
 
             primitive_n_dict = dict()
 
+            atom_skip_list = list()
+            bond_skip_list = list()
+            if self._use_query_query_matches:
+                rdmol = self.rdmol_list[sys_idx]
+                for atom in rdmol.GetAtoms():
+                    sma = atom.GetSmarts()
+                    if "*" in sma:
+                        atom_skip_list.append(
+                            atom.GetIdx()+1)
+                for bond in rdmol.GetBonds():
+                    sma = bond.GetSmarts()
+                    if "~" in sma:
+                        bond_skip_list.append(
+                            (bond.GetBeginAtomIdx()+1,
+                             bond.GetEndAtomIdx()+1))
+
             for key in self.smarts_dict:
                 sma, layer, tag = key
+                if sma != self.parent_smarts:
+                    if isinstance(tag, (list, tuple)):
+                        if tag in bond_skip_list or tag[::-1] in bond_skip_list:
+                            continue
+                    else:
+                        if tag in atom_skip_list:
+                            continue
+
                 if all_primitives_dict[key][sys_idx].size == 0:
                     continue
                 atom_idx_list   = all_primitives_dict[key][sys_idx][:,:-1].tolist()
