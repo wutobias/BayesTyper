@@ -31,11 +31,11 @@ class BaseBitvectorContainer:
             for atom in rdmol.GetAtoms():
                 sma = atom.GetSmarts()
                 if "*" in sma:
-                    wild_card_count +=1
+                    wild_card_count += 1
             for bond in rdmol.GetBonds():
                 sma = bond.GetSmarts()
                 if "~" in sma:
-                    wild_card_count +=1
+                    wild_card_count += 1
             count_dict[sys_idx] = wild_card_count
 
         _rdmol_list      = list()
