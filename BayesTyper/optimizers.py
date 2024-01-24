@@ -951,12 +951,7 @@ class BaseOptimizer(object):
                 bitvec_list = list()
                 for b in _bitvec_list:
                     sma = _bsm.bitvector_to_smarts(b)
-                    if "*" in sma:
-                        continue
-                    if "~" in sma:
-                        continue
                     bitvec_list.append(b)
-                #bitvec_list = [0] + bitvec_list
                 allocations = [-1 for _ in pvec.allocations]
                 bitvector_typing.bitvec_hierarchy_to_allocations(
                     bitvec_list_alloc_dict,
@@ -964,10 +959,11 @@ class BaseOptimizer(object):
                     allocations)
                 N_parms = pvec.parameters_per_force_group
                 for type_i, b in enumerate(bitvec_list):
-                    #if type_i == 0:
-                    #    continue
                     if type_i in allocations:
-                        #sma = _bsm.bitvector_to_smarts(b)
+                        if self.verbose:
+                            sma = _bsm.bitvector_to_smarts(b)
+                            print(
+                                f"Adding initial type {sma}")
                         self.best_bitvec_type_list[-1].append(b)
                         pvec.duplicate(0)
                         counts = pvec.force_group_count - 1
