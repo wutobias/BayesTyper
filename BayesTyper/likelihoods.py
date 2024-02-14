@@ -61,6 +61,7 @@ class LikelihoodVectorized(object):
             self.pvec_list_bkw = list()
         self.openmm_system_dict = dict()
         self.parm_idx_sysname_dict = dict()
+        self.sysname_parm_idx_dict = dict()
         parm_idx = 0
         for i in range(self._N_pvec):
             pvec    = self.pvec_list[i]
@@ -146,6 +147,11 @@ class LikelihoodVectorized(object):
                     else:
                         self.parm_idx_sysname_dict[sys_fwd.name] = [parm_idx]
 
+                    if parm_idx in self.sysname_parm_idx_dict:
+                        self.sysname_parm_idx_dict[parm_idx].append(sys_fwd.name)
+                    else:
+                        self.sysname_parm_idx_dict[parm_idx] = [sys_fwd.name]
+
                 if len(fwd_dict) > 0:
                     self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
                     if self._three_point:
@@ -224,14 +230,18 @@ class LikelihoodVectorized(object):
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
+        sysname_run_list = list()
         worker_id_dict = dict()
         for sysname in self.openmm_system_dict:
+            if sysname in sysname_run_list:
+                continue
             _parm_idx_list = self.parm_idx_sysname_dict[sysname]
             for parm_idx in parm_idx_list:
                 if parm_idx in _parm_idx_list:
                     worker_id = self.targetcomputer.__call__(
                         {sysname:self.openmm_system_dict[sysname]}, False)
                     worker_id_dict[worker_id] = sysname
+                    sysname_run_list.append(sysname)
                     break
             
         worker_id_list = list(worker_id_dict.keys())
@@ -298,13 +308,17 @@ class LikelihoodVectorized(object):
                     worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
                     worker_id_dict[worker_id] = [parm_idx], -1., sys_idx
         if not self._three_point:
+            sysname_run_list = list()
             for sysname in self.openmm_system_dict:
+                if sysname in sysname_run_list:
+                    continue
                 _parm_idx_list = self.parm_idx_sysname_dict[sysname]
                 for parm_idx in parm_idx_list:
                     if parm_idx in _parm_idx_list:
                         worker_id = self.targetcomputer.__call__(
                             {sysname:self.openmm_system_dict[sysname]}, False)
                         worker_id_dict[worker_id] = _parm_idx_list, -1., sysname
+                        sysname_run_list.append(sysname)
                         break
 
         grad = np.zeros(self.N_parms, dtype=float)
