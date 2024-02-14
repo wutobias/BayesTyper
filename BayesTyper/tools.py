@@ -102,8 +102,7 @@ def get_plots(
     skip_torsion=False,
     skip_optgeo=False,
     skip_vib=False,
-    skip_offeq=False,
-):
+    skip_offeq=False):
 
     import pickle
     import numpy as np
@@ -205,6 +204,9 @@ def get_plots(
     all_bond_diff_list = list()
     all_angle_diff_list = list()
     all_torsion_diff_list = list()
+    all_offeq_diff_list = list()
+    all_torsionene_diff_list = list()
+    all_vib_diff_list = list()
     for sys_idx in range(N_sys):
         sys = systemlist[sys_idx]
         smiles = sys.name
@@ -240,7 +242,7 @@ def get_plots(
                         continue
                     ### Bonds
                     if z_idx > 0:
-                        diff = abs(target_zm[z_idx][0] - z_value[0])
+                        diff = target_zm[z_idx][0] - z_value[0]
                         bond_diffs.append(
                             diff.value_in_unit(_LENGTH)
                             )
@@ -326,6 +328,9 @@ def get_plots(
                 freqs_qm = compute_freqs(hessian_qm, masses)
                 freqs_mm_list.extend(freqs_mm._value)
                 freqs_qm_list.extend(freqs_qm._value)
+                
+            all_vib_diff_list = np.array(freqs_mm_list) - np.array(freqs_qm_list)
+            all_vib_diff_list = all_vib_diff_list
 
         if len(freqs_mm_list) == 0:
             continue
@@ -370,11 +375,10 @@ def get_plots(
                         xyz *= _LENGTH_AU
                     engine.set_xyz(xyz)
                     mm_ene_list.append(
-                        engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
-                    )
+                        engine.pot_ene.value_in_unit(_ENERGY_PER_MOL))
                     qm_ene_list.append(
-                        ene.value_in_unit(_ENERGY_PER_MOL)
-                    )
+                        ene.value_in_unit(_ENERGY_PER_MOL))
+
         if len(mm_ene_list)>0 and len(qm_ene_list)>0:
             qm_ene_list = np.array(qm_ene_list)
             mm_ene_list = np.array(mm_ene_list)
@@ -385,6 +389,7 @@ def get_plots(
             valids      = np.where(qm_ene_list < 20.92)
             qm_ene_list = qm_ene_list[valids]
             mm_ene_list = mm_ene_list[valids]
+            all_offeq_diff_list = qm_ene_list - mm_ene_list
 
         if len(mm_ene_list) == 0:
             continue
@@ -445,6 +450,9 @@ def get_plots(
                     min_ene_idx = np.argmin(qm_ene_list)
                     qm_ene_list -= qm_ene_list[min_ene_idx]
                     mm_ene_list -= mm_ene_list[min_ene_idx]
+                    
+                    all_torsionene_diff_list.extend(
+                        (qm_ene_list - mm_ene_list).tolist())
 
                     crd_sort_idxs = np.argsort(dih_crd_list)
 
@@ -481,25 +489,36 @@ def get_plots(
                     else:
                         axs[N_plots].set_title(f"TorEne {smiles}")
                     axs[N_plots].legend(loc="upper left")
-                    N_plots += 1                                               
+                    N_plots += 1
+                
                         
-    if all_bond_diff_list:
-        print(
-            f"Bond length err {np.mean(all_bond_diff_list)} +/- {np.std(all_bond_diff_list)} nm"
-            )
-    if all_angle_diff_list:
-        print(
-            f"Bond angle err {np.mean(all_angle_diff_list)} +/- {np.std(all_angle_diff_list)} deg"
-            )
-    if all_torsion_diff_list:
-        print(
-            f"Torsion err {np.mean(all_torsion_diff_list)} +/- {np.std(all_torsion_diff_list)} deg"
-            )
+    if verbose:
+        if all_bond_diff_list:
+            print(
+                f"Bond length err {np.abs(np.mean(all_bond_diff_list)):6.3f} +/- {np.std(all_bond_diff_list):6.3f} nm"
+                )
+        if all_angle_diff_list:
+            print(
+                f"Bond angle err {np.mean(all_angle_diff_list):6.3f} +/- {np.std(all_angle_diff_list):6.3f} deg"
+                )
+        if all_torsion_diff_list:
+            print(
+                f"Torsion err {np.mean(all_torsion_diff_list):6.3f} +/- {np.std(all_torsion_diff_list):6.3f} deg"
+                )
 
     diff_N_plots = N_plots_fig - N_plots
     for i in range(1,diff_N_plots+1):
         fig.delaxes(axs[-i])
-    return fig, axs
+        
+    results_dict = {
+        "bond_diff"       : np.array(all_bond_diff_list),
+        "angle_diff"      : np.array(all_angle_diff_list),
+        "torsion_diff"    : np.array(all_torsion_diff_list),
+        "offeq_diff"      : np.array(all_offeq_diff_list),
+        "vib_diff"        : np.array(all_vib_diff_list),
+        "torsionene_diff" : np.array(all_torsionene_diff_list)}
+    
+    return fig, axs, results_dict
 
 
 def _remove_types(
