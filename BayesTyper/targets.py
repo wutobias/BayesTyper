@@ -120,15 +120,13 @@ class TargetComputer(object):
         for sys in _system_list:
             if target_type_list == None:
                 self._target_dict[sys.name] = copy.deepcopy(
-                    sys.target_list
-                    )
+                    sys.target_list)
             else:
                 self._target_dict[sys.name] = list()
                 for target in sys.target_list:
                     if isinstance(target, target_type_list):
                         self._target_dict[sys.name].append(
-                                copy.deepcopy(target)
-                            )
+                                copy.deepcopy(target))
 
         self._target_dict = ray.put(self._target_dict)
 
@@ -179,21 +177,21 @@ def compute_freqs(hessian, masses):
     mass_weighted_hessian = hessian_cp * invert_sqrt_mass[:, np.newaxis] * invert_sqrt_mass[np.newaxis, :]
 
     ### freqs/eigvals in units 1/s**2 * 10.e-24
-    eigvals       = np.linalg.eigvals(mass_weighted_hessian)
+    eigvals, eigvecs = np.linalg.eigh(mass_weighted_hessian)
     negative_idxs = np.where(eigvals < 0.)
     ### freqs/eigvals in 1/s * 10.e-12
     freqs         = np.sqrt(np.abs(eigvals))
     freqs[negative_idxs] *= -1
 
     ### remove the 6 freqs with smallest abs value and corresponding normal modes
-    n_remove         = 5 if N_atoms == 2 else 6
+    n_remove = 5 if N_atoms == 2 else 6
     larger_freq_idxs = np.sort(
         np.argpartition(
             np.abs(freqs),
             n_remove
             )[n_remove:]
         )
-    freqs = np.sort(freqs[larger_freq_idxs])
+    freqs = freqs[larger_freq_idxs]
     ### Convert 1/s * 10.e-12 to 1/cm
     ### >>> a = 1. * unit.seconds**-1
     ### >>> a = a * unit.constants.SPEED_OF_LIGHT_C**-1
@@ -362,6 +360,7 @@ class GeoTarget(Target):
     def configure_target(self):
 
         self.zm = ZMatrix(self.rdmol)
+        self.dihedral_skip = list()
 
         ### Note this is not necessarily the number
         ### of physical bonds in the molecule. In 
@@ -381,10 +380,24 @@ class GeoTarget(Target):
         self.target_zm = list()
         for strc_idx in range(self.N_strcs):
             self.target_zm.append(
-                self.zm.build_z_crds(
-                    self.target_strcs[strc_idx]
-                    )
-                )
+                self.zm.build_z_crds(self.target_strcs[strc_idx]))
+            for z_idx in self.zm.z:
+                if z_idx > 2:
+                    aidxs = self.zm.z[z_idx]
+                    a = self.target_strcs[strc_idx][aidxs[0]]
+                    b = self.target_strcs[strc_idx][aidxs[1]]
+                    c = self.target_strcs[strc_idx][aidxs[2]]
+                    d = self.target_strcs[strc_idx][aidxs[3]]
+                    b0 = a-b
+                    b1 = c-b
+                    b2 = d-c
+                    b0 /= np.linalg.norm(b0)
+                    b1 /= np.linalg.norm(b1)
+                    b2 /= np.linalg.norm(b2)
+                    check1 = np.abs(np.dot(b0, b1)) > 0.999
+                    check2 = np.abs(np.dot(b2, b1)) > 0.999
+                    if check1 or check2:
+                        self.dihedral_skip.append(z_idx)
 
     def run(self):
 
@@ -429,7 +442,8 @@ class GeoTarget(Target):
                 continue
 
             target_zm = self.target_zm[strc_idx]
-            for z_idx, z_value in current_zm.items():
+            for z_idx in current_zm:
+                z_value = current_zm[z_idx]
                 if z_idx == 0:
                     continue
                 ### Bonds
@@ -449,13 +463,12 @@ class GeoTarget(Target):
                         rss_bond  += diff**2
                 ### Angles
                 if z_idx > 1:
-                    #print(target_zm[z_idx][1], z_value[1])
                     diff        = abs(target_zm[z_idx][1] - z_value[1])
                     diff        = diff.in_units_of(_ANGLE)
                     diff_angle += diff
                     rss_angle  += diff**2
                 ### Torsions
-                if z_idx > 2:
+                if z_idx > 2 and z_idx not in self.dihedral_skip:
                     diff = abs(target_zm[z_idx][2] - z_value[2])
                     diff = diff.in_units_of(_ANGLE)
                     if diff > 180.*_ANGLE:
@@ -587,9 +600,7 @@ class NormalModeTarget(Target):
 
             success = True
             if self.minimize:
-                success = engine.minimize(
-                    crit=1e-4 * unit.kilojoule * unit.mole**-1
-                    )
+                success = engine.minimize()
             if success:
                 hessian  = engine.compute_hessian()
                 ### Remove 1/mol
