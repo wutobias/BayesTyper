@@ -1970,6 +1970,8 @@ class ForceFieldOptimizer(BaseOptimizer):
         keep_N_best = 10,
         ### Prefix used for saving checkpoints
         prefix="ForceFieldOptimizer",
+        ### Should we try to pickup this run from where we stopped last time?
+        restart=True,
         ):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
@@ -1990,14 +1992,27 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### `False` now since we want this to be done by the Gibbs
         ### Sampler. See parameter `max_gibbs_attempts` and `max_gibbs_post_split_attempts`.
         allow_move = False
+        
+        ### If we restart from a previous version, make sure
+        ### that we do not restart
+        if not hasattr(self, "system_idx_list_batch"):
+            restart = False
 
-        #N_sys_per_batch_split = self.N_systems
+        if not restart:
+            self.system_idx_list_batch = []
+            self.minscore_worker_id_dict = dict()
+            self.selection_worker_id_dict = dict()
+            self.split_iteration_idx = 0
+            self.accepted_counter = 0
+
+        if self.verbose and restart:
+            print("Attempting to restart from previous run.")
+
         for iteration_idx in range(iterations):
 
             if iteration_idx > 0:
                 if (iteration_idx%pair_incr_split) == 0:
                     N_sys_per_batch_split += 1
-                    #N_sys_per_batch_split -= 1
 
             raute_fill = ''.ljust(len(str(iteration_idx))-1,"#")
             print("ITERATION", iteration_idx)
@@ -2006,19 +2021,19 @@ class ForceFieldOptimizer(BaseOptimizer):
             ### ============== ###
             ### PROCESS SPLITS ###
             ### ============== ###
-            split_iteration_idx = 0
             found_improvement   = True
-            #while found_improvement and split_iteration_idx < max_splitting_attempts:
-            while split_iteration_idx < max_splitting_attempts:
-                print(f"ATTEMPTING SPLIT {iteration_idx}/{split_iteration_idx}")
-                found_improvement       = False
-                system_idx_list_batch   = self.get_random_system_idx_list(N_sys_per_batch_split, N_batches)
+            while self.split_iteration_idx < max_splitting_attempts:
+                print(f"ATTEMPTING SPLIT {iteration_idx}/{self.split_iteration_idx}")
+                found_improvement = False
+                if not restart:
+                    self.system_idx_list_batch = self.get_random_system_idx_list(
+                        N_sys_per_batch_split, N_batches)
 
                 if optimize_system_ordering:
                     if self.verbose:
                         print(
                             "Initial ordering of systems:",
-                            system_idx_list_batch
+                            self.system_idx_list_batch
                             )
                         print(
                             "Optimizing system priority timings ..."
@@ -2026,10 +2041,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                     ### Compute average compute time for each `sys_idx_pair`
                     ### over `N_trails_opt` replicates.
-                    N_trials_opt = 25
+                    N_trials_opt   = 25
                     worker_id_dict = dict()
                     time_diff_dict = dict()
-                    for sys_idx_pair in system_idx_list_batch:
+                    for sys_idx_pair in self.system_idx_list_batch:
                         time_diff_dict[sys_idx_pair] = 0.
                         pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
                         pvec = pvec_list[0]
@@ -2071,127 +2086,131 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 worker_id_dict[worker_id] = sys_idx_pair
                         worker_id_list = list(worker_id_dict.keys())
 
-                    system_idx_list_batch = [sys_idx_pair for sys_idx_pair, _ in sorted(time_diff_dict.items(), key=lambda items: items[1], reverse=True)]
-                    system_idx_list_batch = tuple(system_idx_list_batch)
+                    self.system_idx_list_batch = [sys_idx_pair for sys_idx_pair, _ in sorted(time_diff_dict.items(), key=lambda items: items[1], reverse=True)]
+                    self.system_idx_list_batch = tuple(self.system_idx_list_batch)
                     if self.verbose:
                         print(
                             "Optimized ordering of systems:",
-                            system_idx_list_batch
+                            self.system_idx_list_batch
                             )
 
                 if self.verbose:
                     print(
                         "Optimize parameters."
                         )
-                minimize_initial_worker_id_dict = dict()
-                for sys_idx_pair in system_idx_list_batch:
-                    pvec_list, _ = self.generate_parameter_vectors(
-                        system_idx_list=sys_idx_pair)
-                    worker_id = minimize_FF.remote(
-                        system_list = [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
-                        targetcomputer = self.targetcomputer_id,
-                        pvec_list = pvec_list,
-                        bitvec_type_list = list(),
-                        bounds_list = self.bounds_list,
-                        parm_penalty = 1.,
-                        use_DE=False,
-                        bounds_penalty=100.)
-                    minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
+                if not restart:
+                    minimize_initial_worker_id_dict = dict()
+                    for sys_idx_pair in self.system_idx_list_batch:
+                        pvec_list, _ = self.generate_parameter_vectors(
+                            system_idx_list=sys_idx_pair)
+                        worker_id = minimize_FF.remote(
+                            system_list = [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                            targetcomputer = self.targetcomputer_id,
+                            pvec_list = pvec_list,
+                            bitvec_type_list = list(),
+                            bounds_list = self.bounds_list,
+                            parm_penalty = 1.,
+                            use_DE=False,
+                            bounds_penalty=100.)
+                        minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
-                if self.verbose:
-                    print(
-                        "Generating splits and computing grad scores."
+                    if self.verbose:
+                        print(
+                            "Generating splits and computing grad scores."
                         )
-                split_worker_id_dict = dict()
-                worker_id_list = list(minimize_initial_worker_id_dict.keys())
-                while worker_id_list:
-                    worker_id, worker_id_list = ray.wait(
-                        worker_id_list, timeout=_TIMEOUT)
-                    failed = len(worker_id) == 0
-                    if not failed:
-                        try:
-                            _, pvec_list_cp, _ = ray.get(worker_id[0])
-                            sys_idx_pair = minimize_initial_worker_id_dict[worker_id[0]]
-                            del minimize_initial_worker_id_dict[worker_id[0]]
-                            for mngr_idx in range(self.N_mngr):
-                                split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(                                                                   
-                                    mngr_idx,                                                                                                                         
-                                    self.best_bitvec_type_list[mngr_idx],                                                                                             
-                                    sys_idx_pair,                                                                                                                     
-                                    pvec_start=pvec_list_cp[mngr_idx],                                                                                                
-                                    N_trials_gradient=N_trials_gradient,
-                                    split_all=True)
-                        except:
-                            failed = True
-                    if failed:
-                        if len(worker_id) > 0:
-                            if worker_id[0] not in worker_id_list:
-                                worker_id_list.append(worker_id[0])
-                        resubmit_list = retrieve_failed_workers(worker_id_list)
-                        for worker_id in resubmit_list:
-                            sys_idx_pair = minimize_initial_worker_id_dict[worker_id]
-                            del minimize_initial_worker_id_dict[worker_id]
+                    split_worker_id_dict = dict()
+                    worker_id_list = list(minimize_initial_worker_id_dict.keys())
+                    while worker_id_list:
+                        worker_id, worker_id_list = ray.wait(
+                            worker_id_list, timeout=_TIMEOUT)
+                        failed = len(worker_id) == 0
+                        if not failed:
                             try:
-                                ray.cancel(worker_id)
+                                _, pvec_list_cp, _ = ray.get(worker_id[0])
+                                sys_idx_pair = minimize_initial_worker_id_dict[worker_id[0]]
+                                del minimize_initial_worker_id_dict[worker_id[0]]
+                                for mngr_idx in range(self.N_mngr):
+                                    split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(                                                                   
+                                        mngr_idx,                                                                                                                         
+                                        self.best_bitvec_type_list[mngr_idx],                                                                                             
+                                        sys_idx_pair,                                                                                                                     
+                                        pvec_start=pvec_list_cp[mngr_idx],                                                                                                
+                                        N_trials_gradient=N_trials_gradient,
+                                        split_all=True)
                             except:
-                                pass
-                            pvec_list, _ = self.generate_parameter_vectors(
-                                system_idx_list=sys_idx_pair)
-                            worker_id = minimize_FF.remote(
-                                system_list = [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
-                                targetcomputer = self.targetcomputer_id,
-                                pvec_list = pvec_list,
-                                bitvec_type_list = list(),
-                                bounds_list = self.bounds_list,
-                                parm_penalty = 1.,
-                                use_DE=False,
-                                bounds_penalty=1000.) 
-                            minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
+                                failed = True
+                        if failed:
+                            if len(worker_id) > 0:
+                                if worker_id[0] not in worker_id_list:
+                                    worker_id_list.append(worker_id[0])
+                            resubmit_list = retrieve_failed_workers(worker_id_list)
+                            for worker_id in resubmit_list:
+                                sys_idx_pair = minimize_initial_worker_id_dict[worker_id]
+                                del minimize_initial_worker_id_dict[worker_id]
+                                try:
+                                    ray.cancel(worker_id)
+                                except:
+                                    pass
+                                pvec_list, _ = self.generate_parameter_vectors(
+                                    system_idx_list=sys_idx_pair)
+                                worker_id = minimize_FF.remote(
+                                    system_list = [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                                    targetcomputer = self.targetcomputer_id,
+                                    pvec_list = pvec_list,
+                                    bitvec_type_list = list(),
+                                    bounds_list = self.bounds_list,
+                                    parm_penalty = 1.,
+                                    use_DE=False,
+                                    bounds_penalty=1000.) 
+                                minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
-                        import time
-                        time.sleep(_TIMEOUT)
-                        worker_id_list = list(minimize_initial_worker_id_dict.keys())
+                            import time
+                            time.sleep(_TIMEOUT)
+                            worker_id_list = list(minimize_initial_worker_id_dict.keys())
 
-                if self.verbose:
-                    print(
-                        "Obtaining votes and submitting parameter minimizations."
-                        )
-                worker_id_dict = dict()
-                bitvec_dict = dict()
-                for mngr_idx in range(self.N_mngr):
-                    for sys_idx_pair in system_idx_list_batch:
-                        votes_split_list = self.get_votes(
-                            worker_id_dict=split_worker_id_dict[mngr_idx,sys_idx_pair][0],
-                            low_to_high=True,
-                            abs_grad_score=False,
-                            norm_cutoff=1.e-2,
-                            keep_N_best=keep_N_best,
+                    if self.verbose:
+                        print(
+                            "Obtaining votes and submitting parameter minimizations."
                             )
-                        worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
-                            mngr_idx_main=mngr_idx,
-                            system_idx_list=sys_idx_pair,
-                            votes_split_list=votes_split_list,
-                            parallel_targets=False,
-                            )
-                        bitvec_dict[mngr_idx,sys_idx_pair] = dict()
-                        for ast in votes_split_list:
-                            b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
-                            bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
-
-                        if self.verbose:
-                            print(
-                                f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
-                                f"Found {len(votes_split_list)} candidate split solutions ...\n",
+                    bitvec_dict = dict()
+                    for mngr_idx in range(self.N_mngr):
+                        for sys_idx_pair in self.system_idx_list_batch:
+                            votes_split_list = self.get_votes(
+                                worker_id_dict = split_worker_id_dict[mngr_idx,sys_idx_pair][0],
+                                low_to_high = True,
+                                abs_grad_score = False,
+                                norm_cutoff = 1.e-2,
+                                keep_N_best = keep_N_best,
                                 )
+                            self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
+                                mngr_idx_main=mngr_idx,
+                                system_idx_list=sys_idx_pair,
+                                votes_split_list=votes_split_list,
+                                parallel_targets=False,
+                                )
+                            bitvec_dict[mngr_idx,sys_idx_pair] = dict()
+                            for ast in votes_split_list:
+                                b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
+                                bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
+
+                            if self.verbose:
+                                print(
+                                    f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
+                                    f"Found {len(votes_split_list)} candidate split solutions ...\n",
+                                    )
+                            del split_worker_id_dict[mngr_idx,sys_idx_pair]
+
+                    ### =============
+                    ### END SPLITTING
+                    ### =============
 
                 if self.verbose:
                     print(
                         "Selecting best parameters."
                         )
-                system_idx_list_batch = system_idx_list_batch[::-1]
+                self.system_idx_list_batch = self.system_idx_list_batch[::-1]
                 gibbs_dict = dict()
                 gibbs_count_dict = dict()
-                accepted_counter = 0
                 old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors()
                 best_AIC = self.calculate_AIC(
                     parm_penalty=self.parm_penalty_split
@@ -2204,26 +2223,81 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bitvec_alloc_dict_list.append(
                         bitvec_alloc_dict
                         )
-                for mngr_idx in range(self.N_mngr):
-                    selection_worker_id_dict = dict()
-                    for sys_idx_pair in system_idx_list_batch:
-                        worker_id = set_parameters_remote.remote(
-                            mngr_idx_main = mngr_idx,
-                            pvec_list = old_pvec_list,
-                            targetcomputer = self.targetcomputer_id,
-                            bitvec_dict = bitvec_dict[mngr_idx, sys_idx_pair],
-                            bitvec_alloc_dict_list = bitvec_alloc_dict_list,
-                            bitvec_type_list_list = old_bitvec_type_list,
-                            worker_id_dict = worker_id_dict[mngr_idx,sys_idx_pair],
-                            parm_penalty = self.parm_penalty_split,
-                            verbose = self.verbose,
-                            )
-                        selection_worker_id_dict[worker_id] = sys_idx_pair
+                        
+                if restart:
+                    _minscore_worker_id_dict = dict()
+                    for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
+                        worker_id_dict = self.minscore_worker_id_dict[mngr_idx, sys_idx_pair]
+                        worker_id_list = worker_id_dict.keys()
+                        pvec_list, bitvec_type_list = self.generate_parameter_vectors(
+                            system_idx_list=sys_idx_pair)
+                        pvec_all_id = ray.put(pvec_list)
+                        bitvec_type_list_id = ray.put(bitvec_type_list)
+                        system_list_id = ray.put([self.system_list[sys_idx] for sys_idx in sys_idx_pair])
+                        
+                        _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
+                        for worker_id in worker_id_list:
+                            args = worker_id_dict[worker_id]
+                            ast = args[0]
+                            worker_id = minimize_FF.remote(
+                                    system_list = system_list_id,
+                                    targetcomputer = self.targetcomputer_id,
+                                    pvec_list = pvec_all_id,
+                                    bitvec_type_list = bitvec_type_list_id,
+                                    bounds_list = self.bounds_list,
+                                    parm_penalty = self.parm_penalty_split,
+                                    pvec_idx_min = [mngr_idx],
+                                    parallel_targets = False,
+                                    bounds_penalty= self.bounds_penalty_list[mngr_idx],
+                                    use_scipy = True,
+                                    verbose = self.verbose,
+                                    )
+                            args = ast, system_list_id, self.targetcomputer_id, pvec_all_id, \
+                                   bitvec_type_list_id, self.bounds_list, self.parm_penalty_split, \
+                                   mngr_idx, self.bounds_penalty_list[mngr_idx], sys_idx_pair
+                            _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
+                    self.minscore_worker_id_dict = _minscore_worker_id_dict
 
-                    selection_worker_id_list = list(selection_worker_id_dict.keys())
+                for mngr_idx in range(self.N_mngr):
+                    if mngr_idx not in self.selection_worker_id_dict:
+                        self.selection_worker_id_dict[mngr_idx] = dict()
+                    if not restart:
+                        for sys_idx_pair in self.system_idx_list_batch:
+                            b_list = bitvec_dict[mngr_idx, sys_idx_pair]
+                            worker_id = set_parameters_remote.remote(
+                                mngr_idx_main = mngr_idx,
+                                pvec_list = old_pvec_list,
+                                targetcomputer = self.targetcomputer_id,
+                                bitvec_dict = b_list,
+                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                bitvec_type_list_list = old_bitvec_type_list,
+                                worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                                parm_penalty = self.parm_penalty_split,
+                                verbose = self.verbose,
+                                )
+                            self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair, b_list
+                    else:
+                        _selection_worker_id_dict = dict()
+                        for worker_id in self.selection_worker_id_dict[mngr_idx]:
+                            sys_idx_pair, b_list = self.selection_worker_id_dict[mngr_idx][worker_id]
+                            worker_id = set_parameters_remote.remote(
+                                mngr_idx_main = mngr_idx,
+                                pvec_list = old_pvec_list,
+                                targetcomputer = self.targetcomputer_id,
+                                bitvec_dict = b_list,
+                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                bitvec_type_list_list = old_bitvec_type_list,
+                                worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                                parm_penalty = self.parm_penalty_split,
+                                verbose = self.verbose,
+                                )
+                            _selection_worker_id_dict[worker_id] = sys_idx_pair, b_list
+                        self.selection_worker_id_dict[mngr_idx] = _selection_worker_id_dict
+
+                    selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
                     while selection_worker_id_list:
                         worker_id, selection_worker_id_list = ray.wait(
-                            selection_worker_id_list, timeout=_TIMEOUT)
+                            selection_worker_id_list, timeout=_TIMEOUT*100)
                         failed = len(worker_id) == 0
                         if not failed:
                             #try:
@@ -2231,9 +2305,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                             #        worker_id[0], timeout=_TIMEOUT)
                             #except:
                             #    failed = True
-                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(worker_id[0], timeout=_TIMEOUT)
+                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                                    worker_id[0], timeout=_TIMEOUT)
                             if not failed:
-                                sys_idx_pair = selection_worker_id_dict[worker_id[0]]
+                                sys_idx_pair, _ = self.selection_worker_id_dict[mngr_idx][worker_id[0]]
                                 if self.verbose:
                                     print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
 
@@ -2252,12 +2327,14 @@ class ForceFieldOptimizer(BaseOptimizer):
                                         print(
                                             f"Found no improvement for sys {sys_idx_pair}.",
                                             )
+
+                                del self.selection_worker_id_dict[mngr_idx][worker_id[0]]
+                                del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
                                 
                                 if found_improvement_mngr:
                                     found_improvement = True
                                     best_AIC = new_AIC
                                 else:
-                                    del selection_worker_id_dict[worker_id[0]]
                                     continue
 
                                 if self.verbose:
@@ -2302,40 +2379,46 @@ class ForceFieldOptimizer(BaseOptimizer):
                                             )
 
                                 import pickle
-                                with open(f"{prefix}-MAIN-{iteration_idx}-SPLIT-{split_iteration_idx}-ACCEPTED-{accepted_counter}.pickle", "wb") as fopen:
+                                with open(f"{prefix}-MAIN-{iteration_idx}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
                                     pickle.dump(
                                         self,
                                         fopen
                                     )
-                                accepted_counter += 1
+                                self.accepted_counter += 1
                                 
-                                del selection_worker_id_dict[worker_id[0]]
-
                         if failed:
                             if len(worker_id) > 0:
                                 if worker_id[0] not in selection_worker_id_list:
                                     selection_worker_id_list.append(worker_id[0])
                             resubmit_list = retrieve_failed_workers(selection_worker_id_list)
                             for worker_id in resubmit_list:
-                                sys_idx_pair = selection_worker_id_dict[worker_id]
+                                sys_idx_pair, b_list = self.selection_worker_id_dict[mngr_idx][worker_id]
                                 ray.cancel(worker_id, force=True)
-                                del selection_worker_id_dict[worker_id]
+                                del self.selection_worker_id_dict[mngr_idx][worker_id]
 
                                 worker_id = set_parameters_remote.remote(
                                     mngr_idx_main = mngr_idx,
                                     pvec_list = old_pvec_list,
                                     targetcomputer = self.targetcomputer_id,
-                                    bitvec_dict = bitvec_dict[mngr_idx, sys_idx_pair],
+                                    bitvec_dict = b_list,
                                     bitvec_alloc_dict_list = bitvec_alloc_dict_list,
                                     bitvec_type_list_list = old_bitvec_type_list,
-                                    worker_id_dict = worker_id_dict[mngr_idx,sys_idx_pair],
+                                    worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
                                     parm_penalty = self.parm_penalty_split,
                                     verbose = self.verbose,
                                     )
-                                selection_worker_id_dict[worker_id] = sys_idx_pair
-                            selection_worker_id_list = list(selection_worker_id_dict.keys())
+                                self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair, b_list
+                            selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
 
-                split_iteration_idx += 1
+                self.split_iteration_idx += 1
+                self.accepted_counter = 0
+
+            ### Remove tempory data
+            self.system_idx_list_batch = []
+            self.minscore_worker_id_dict = dict()
+            self.selection_worker_id_dict = dict()
+            self.split_iteration_idx = 0
+            self.accepted_counter = 0
                 
             ### ========================== ###
             ### DRAW FROM TYPING POSTERIOR ###
@@ -2399,6 +2482,8 @@ class ForceFieldOptimizer(BaseOptimizer):
             ### ============== ###
 
             self.save_traj(parm_penalty=1.)
+            if restart:
+                restart = False
 
             if self.verbose:
                 print("")
