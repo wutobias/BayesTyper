@@ -194,7 +194,7 @@ def get_gradient_scores(
     selection_i = None,
     k_values_ij = None,
     grad_diff = _EPSILON_GS,
-    N_trials = 10,
+    N_trials = 5,
     ):
 
     ff_parameter_vector_cp = ff_parameter_vector.copy(
@@ -1381,7 +1381,7 @@ class BaseOptimizer(object):
         bitvec_type_list,
         system_idx_list,
         pvec_start=None,
-        N_trials_gradient=10,
+        N_trials_gradient=5,
         split_all=False,
         max_on=0.1,
         max_splits=100,
@@ -1969,9 +1969,13 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### Keep the `keep_N_best` solutions for each split
         keep_N_best = 10,
         ### Prefix used for saving checkpoints
-        prefix="ForceFieldOptimizer",
+        prefix = "ForceFieldOptimizer",
+        ### Offset for numbering the output files
+        output_offset = 0,
         ### Should we try to pickup this run from where we stopped last time?
-        restart=True,
+        restart = True,
+        ### Benchmark compute time for each batch over `N_trails_opt` replicates.
+        N_trials_opt = 40
         ):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
@@ -2039,9 +2043,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                             "Optimizing system priority timings ..."
                             )
 
-                    ### Compute average compute time for each `sys_idx_pair`
-                    ### over `N_trails_opt` replicates.
-                    N_trials_opt   = 25
                     worker_id_dict = dict()
                     time_diff_dict = dict()
                     for sys_idx_pair in self.system_idx_list_batch:
@@ -2379,7 +2380,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                             )
 
                                 import pickle
-                                with open(f"{prefix}-MAIN-{iteration_idx}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
+                                with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
                                     pickle.dump(
                                         self,
                                         fopen
@@ -2471,7 +2472,7 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.garbage_collection()
             
             import pickle
-            with open(f"{prefix}-MAIN-{iteration_idx}-GARBAGE_COLLECTION.pickle", "wb") as fopen:
+            with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-GARBAGE_COLLECTION.pickle", "wb") as fopen:
                 pickle.dump(
                     self,
                     fopen
@@ -2489,7 +2490,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 print("")
 
             import pickle
-            with open(f"{prefix}-MAIN-{iteration_idx}.pickle", "wb") as fopen:
+            with open(f"{prefix}-MAIN-{iteration_idx+output_offset}.pickle", "wb") as fopen:
                 pickle.dump(
                     self,
                     fopen
