@@ -274,6 +274,19 @@ class AngleContainer(ForceTypeContainer):
     def angle(
         self,
         value: _UNIT_QUANTITY):
+
+        LOWER = 0. * unit.degree
+        UPPER = 180. * unit.degree
+        RANGE = 180. * unit.degree
+        if value < LOWER:
+            n = np.floor(value/RANGE)
+            value += (n+1)*RANGE
+            value -= 2.* value
+        elif value > UPPER:
+            n = np.floor(value/RANGE)
+            value -= (n-1)*RANGE
+            value -= 2.* (value - UPPER)
+
         self._angle = abs(value.in_unit_system(unit.md_unit_system))
 
 
