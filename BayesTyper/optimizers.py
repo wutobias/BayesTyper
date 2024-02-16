@@ -2001,11 +2001,22 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### that we do not restart
         if not hasattr(self, "system_idx_list_batch"):
             restart = False
+        if not hasattr(self, "minscore_worker_id_dict"):
+            restart = False
+        if not hasattr(self, "selection_worker_id_dict"):
+            restart = False
+        if not hasattr(self, "bitvec_dict"):
+            restart = False
+        if not hasattr(self, "split_iteration_idx"):
+            restart = False
+        if not hasattr(self, "accepted_counter"):
+            restart = False
 
         if not restart:
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
+            self.bitvec_dict = dict()
             self.split_iteration_idx = 0
             self.accepted_counter = 0
 
@@ -2173,7 +2184,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                         print(
                             "Obtaining votes and submitting parameter minimizations."
                             )
-                    bitvec_dict = dict()
                     for mngr_idx in range(self.N_mngr):
                         for sys_idx_pair in self.system_idx_list_batch:
                             votes_split_list = self.get_votes(
@@ -2189,10 +2199,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 votes_split_list=votes_split_list,
                                 parallel_targets=False,
                                 )
-                            bitvec_dict[mngr_idx,sys_idx_pair] = dict()
+                            self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
                             for ast in votes_split_list:
                                 b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
-                                bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
+                                self.bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
 
                             if self.verbose:
                                 print(
@@ -2200,6 +2210,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     f"Found {len(votes_split_list)} candidate split solutions ...\n",
                                     )
                             del split_worker_id_dict[mngr_idx,sys_idx_pair]
+
+                    import pickle
+                    with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-SELECTION.pickle", "wb") as fopen:
+                        pickle.dump(
+                            self,
+                            fopen
+                        )
 
                     ### =============
                     ### END SPLITTING
@@ -2225,11 +2242,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                         bitvec_alloc_dict
                         )
                         
+                ### If we want to restart, first make sure that we re-run all
+                ### the left-over minimization runs
                 if restart:
                     _minscore_worker_id_dict = dict()
                     for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
-                        worker_id_dict = self.minscore_worker_id_dict[mngr_idx, sys_idx_pair]
-                        worker_id_list = worker_id_dict.keys()
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
                         pvec_all_id = ray.put(pvec_list)
@@ -2237,9 +2254,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         system_list_id = ray.put([self.system_list[sys_idx] for sys_idx in sys_idx_pair])
                         
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
-                        for worker_id in worker_id_list:
-                            args = worker_id_dict[worker_id]
-                            ast = args[0]
+                        for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
                             worker_id = minimize_FF.remote(
                                     system_list = system_list_id,
                                     targetcomputer = self.targetcomputer_id,
@@ -2260,41 +2275,23 @@ class ForceFieldOptimizer(BaseOptimizer):
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
 
                 for mngr_idx in range(self.N_mngr):
-                    if mngr_idx not in self.selection_worker_id_dict:
-                        self.selection_worker_id_dict[mngr_idx] = dict()
-                    if not restart:
-                        for sys_idx_pair in self.system_idx_list_batch:
-                            b_list = bitvec_dict[mngr_idx, sys_idx_pair]
-                            worker_id = set_parameters_remote.remote(
-                                mngr_idx_main = mngr_idx,
-                                pvec_list = old_pvec_list,
-                                targetcomputer = self.targetcomputer_id,
-                                bitvec_dict = b_list,
-                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
-                                bitvec_type_list_list = old_bitvec_type_list,
-                                worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
-                                parm_penalty = self.parm_penalty_split,
-                                verbose = self.verbose,
-                                )
-                            self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair, b_list
-                    else:
-                        _selection_worker_id_dict = dict()
-                        for worker_id in self.selection_worker_id_dict[mngr_idx]:
-                            sys_idx_pair, b_list = self.selection_worker_id_dict[mngr_idx][worker_id]
-                            worker_id = set_parameters_remote.remote(
-                                mngr_idx_main = mngr_idx,
-                                pvec_list = old_pvec_list,
-                                targetcomputer = self.targetcomputer_id,
-                                bitvec_dict = b_list,
-                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
-                                bitvec_type_list_list = old_bitvec_type_list,
-                                worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
-                                parm_penalty = self.parm_penalty_split,
-                                verbose = self.verbose,
-                                )
-                            _selection_worker_id_dict[worker_id] = sys_idx_pair, b_list
-                        self.selection_worker_id_dict[mngr_idx] = _selection_worker_id_dict
+                    self.selection_worker_id_dict[mngr_idx] = dict()
+                for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
+                    b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
+                    worker_id = set_parameters_remote.remote(
+                        mngr_idx_main = mngr_idx,
+                        pvec_list = old_pvec_list,
+                        targetcomputer = self.targetcomputer_id,
+                        bitvec_dict = b_list,
+                        bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                        bitvec_type_list_list = old_bitvec_type_list,
+                        worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                        parm_penalty = self.parm_penalty_split,
+                        verbose = self.verbose,
+                        )
+                    self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair
 
+                for mngr_idx in range(self.N_mngr):
                     selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
                     while selection_worker_id_list:
                         worker_id, selection_worker_id_list = ray.wait(
@@ -2309,7 +2306,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
                                     worker_id[0], timeout=_TIMEOUT)
                             if not failed:
-                                sys_idx_pair, _ = self.selection_worker_id_dict[mngr_idx][worker_id[0]]
+                                sys_idx_pair = self.selection_worker_id_dict[mngr_idx][worker_id[0]]
                                 if self.verbose:
                                     print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
 
@@ -2331,6 +2328,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                                 del self.selection_worker_id_dict[mngr_idx][worker_id[0]]
                                 del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
+                                del self.bitvec_dict[mngr_idx, sys_idx_pair]
                                 
                                 if found_improvement_mngr:
                                     found_improvement = True
@@ -2393,7 +2391,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     selection_worker_id_list.append(worker_id[0])
                             resubmit_list = retrieve_failed_workers(selection_worker_id_list)
                             for worker_id in resubmit_list:
-                                sys_idx_pair, b_list = self.selection_worker_id_dict[mngr_idx][worker_id]
+                                sys_idx_pair = self.selection_worker_id_dict[mngr_idx][worker_id]
+                                b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
                                 ray.cancel(worker_id, force=True)
                                 del self.selection_worker_id_dict[mngr_idx][worker_id]
 
@@ -2408,7 +2407,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     parm_penalty = self.parm_penalty_split,
                                     verbose = self.verbose,
                                     )
-                                self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair, b_list
+                                self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair
                             selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
 
                 self.split_iteration_idx += 1
@@ -2418,6 +2417,7 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
+            self.bitvec_dict = dict()
             self.split_iteration_idx = 0
             self.accepted_counter = 0
                 
