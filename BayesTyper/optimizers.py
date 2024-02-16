@@ -2224,7 +2224,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 if self.verbose:
                     print(
-                        "Selecting best parameters."
+                        "Finding best parameters."
                         )
                 self.system_idx_list_batch = self.system_idx_list_batch[::-1]
                 gibbs_dict = dict()
@@ -2411,13 +2411,30 @@ class ForceFieldOptimizer(BaseOptimizer):
                             selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
 
                 self.split_iteration_idx += 1
+
+                ### Remove tempory data
+                ### self.split_iteration_idx must not be reset
+                self.system_idx_list_batch = []
+                self.minscore_worker_id_dict = dict()
+                self.selection_worker_id_dict = dict()
+                self.bitvec_dict = dict()
                 self.accepted_counter = 0
 
+                if restart:
+                    restart = False
+
+                ### ================= ###
+                ### END SPLIT ATTEMPT ###
+                ### ================= ###
+            
             ### Remove tempory data
+            if restart:
+                restart = False
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
             self.bitvec_dict = dict()
+            # self.split_iteration_idx must be reset here
             self.split_iteration_idx = 0
             self.accepted_counter = 0
                 
@@ -2483,8 +2500,6 @@ class ForceFieldOptimizer(BaseOptimizer):
             ### ============== ###
 
             self.save_traj(parm_penalty=1.)
-            if restart:
-                restart = False
 
             if self.verbose:
                 print("")
