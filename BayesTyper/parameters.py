@@ -208,12 +208,18 @@ class BondContainer(ForceTypeContainer):
     def length(
         self, 
         value: _UNIT_QUANTITY):
+
+        if value < 0.*_LENGTH:
+            value = 0.*_LENGTH
         self._length = abs(value.in_unit_system(unit.md_unit_system))
 
     @k.setter
     def k(
         self, 
         value: _UNIT_QUANTITY):
+        
+        if value < 0. * _FORCE_CONSTANT_BOND:
+            value = 0. * _FORCE_CONSTANT_BOND
         self._k = abs(value.in_unit_system(unit.md_unit_system))
 
 
@@ -268,24 +274,20 @@ class AngleContainer(ForceTypeContainer):
     def k(
         self, 
         value: _UNIT_QUANTITY):
+        
+        if value < 0. * _FORCE_CONSTANT_ANGLE:
+            value = 0. * _FORCE_CONSTANT_ANGLE
         self._k = abs(value.in_unit_system(unit.md_unit_system))
 
     @angle.setter
     def angle(
         self,
         value: _UNIT_QUANTITY):
-
-        LOWER = 0. * unit.degree
-        UPPER = 180. * unit.degree
-        RANGE = 180. * unit.degree
-        if value < LOWER:
-            n = np.floor(value/RANGE)
-            value += (n+1)*RANGE
-            value -= 2.* value
-        elif value > UPPER:
-            n = np.floor(value/RANGE)
-            value -= (n-1)*RANGE
-            value -= 2.* (value - UPPER)
+        
+        if value < 0. * _ANGLE:
+            value = 0. * unit.degree
+        elif value > 180. * unit.degree:
+            value = 180. * unit.degree
 
         self._angle = abs(value.in_unit_system(unit.md_unit_system))
 
