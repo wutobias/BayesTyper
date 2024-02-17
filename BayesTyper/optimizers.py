@@ -1975,7 +1975,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### Should we try to pickup this run from where we stopped last time?
         restart = True,
         ### Benchmark compute time for each batch over `N_trails_opt` replicates.
-        N_trials_opt = 40
+        N_trials_opt = 20
         ):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
