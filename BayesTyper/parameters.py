@@ -211,7 +211,7 @@ class BondContainer(ForceTypeContainer):
 
         if value < 0.*_LENGTH:
             value = 0.*_LENGTH
-        self._length = abs(value.in_unit_system(unit.md_unit_system))
+        self._length = value.in_unit_system(unit.md_unit_system)
 
     @k.setter
     def k(
@@ -220,7 +220,7 @@ class BondContainer(ForceTypeContainer):
         
         if value < 0. * _FORCE_CONSTANT_BOND:
             value = 0. * _FORCE_CONSTANT_BOND
-        self._k = abs(value.in_unit_system(unit.md_unit_system))
+        self._k = value.in_unit_system(unit.md_unit_system)
 
 
 class AngleContainer(ForceTypeContainer):
@@ -277,7 +277,7 @@ class AngleContainer(ForceTypeContainer):
         
         if value < 0. * _FORCE_CONSTANT_ANGLE:
             value = 0. * _FORCE_CONSTANT_ANGLE
-        self._k = abs(value.in_unit_system(unit.md_unit_system))
+        self._k = value.in_unit_system(unit.md_unit_system)
 
     @angle.setter
     def angle(
@@ -289,7 +289,7 @@ class AngleContainer(ForceTypeContainer):
         elif value > 180. * unit.degree:
             value = 180. * unit.degree
 
-        self._angle = abs(value.in_unit_system(unit.md_unit_system))
+        self._angle = value.in_unit_system(unit.md_unit_system)
 
 
 class ProperTorsionContainer(ForceTypeContainer):
