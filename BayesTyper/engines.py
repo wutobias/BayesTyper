@@ -20,6 +20,7 @@ from openmm import app
 from .constants import (_LENGTH,
                         _ANGLE,
                         _ENERGY_PER_MOL,
+                        _MIN_TOLERACE,
                         _FORCE,
                         _ATOMIC_MASS,
                         _FORCE_CONSTANT_BOND,
@@ -277,13 +278,13 @@ class OpenmmEngine(object):
 
     def minimize(
         self, 
-        crit=1e-4 * unit.kilojoule * unit.mole**-1
+        crit=_MIN_TOLERACE,
         ):
 
         success = True
 
-        crit  = crit.in_units_of(unit.kilojoule * unit.mole**-1)
-        steps = int(max(1, -1 * np.log10(crit._value)))
+        crit  = crit.value_in_unit(_MIN_TOLERACE.unit)
+        steps = int(max(1, -1 * np.log10(crit)))
 
         ### E1 and E2 are just for testing purpose
         #E1 = self.pot_ene
@@ -295,8 +296,8 @@ class OpenmmEngine(object):
         try:
             ### This is mainly from forcebalance code.
             ### See https://github.com/leeping/forcebalance/blob/128f9e50f87ac3f5162ffd490ee63c975758f781/src/openmmio.py
-            for logc in np.linspace(0, np.log10(crit._value), steps):
-                tol = 10**logc * unit.kilojoule * unit.mole**-1
+            for logc in np.linspace(0, np.log10(crit), steps):
+                tol = 10**logc * _MIN_TOLERACE.unit
                 ### Note: The forcebalance implementation uses maxIterations=100000
                 ###       here. However, that makes the overall performance *very* slow.
                 self.openmm_simulation.minimizeEnergy(
@@ -305,6 +306,7 @@ class OpenmmEngine(object):
                     )
             self.update_state()
             ene_min_old = self.pot_ene
+            crit *= _MIN_TOLERACE.unit
             for _ in range(1000):
                 self.openmm_simulation.minimizeEnergy(
                     tolerance=crit, 
@@ -317,6 +319,9 @@ class OpenmmEngine(object):
                 #E2 = self.pot_ene
                 #print("E1:", E1, "E2:", E2)
         except:
+            if _VERBOSE:
+                import traceback
+                print(traceback.format_exc())
             success = False
 
         return success
