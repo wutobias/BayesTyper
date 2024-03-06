@@ -195,6 +195,7 @@ def get_gradient_scores(
     k_values_ij = None,
     grad_diff = _EPSILON_GS,
     N_trials = 5,
+    N_sys_per_likelihood_batch = 4
     ):
 
     ff_parameter_vector_cp = ff_parameter_vector.copy(
@@ -227,6 +228,7 @@ def get_gradient_scores(
     likelihood_func = LikelihoodVectorized(
         [ff_parameter_vector_cp],
         targetcomputer,
+        N_sys_per_batch = N_sys_per_likelihood_batch
         )
 
     initial_vec = copy.deepcopy(ff_parameter_vector_cp[first_parm_i:last_parm_i])
@@ -305,6 +307,7 @@ def minimize_FF(
     pvec_idx_min=None,
     grad_diff=_EPSILON,
     parallel_targets=True,
+    N_sys_per_likelihood_batch=4,
     bounds_penalty=10.,
     use_scipy=True,
     use_DE=False,
@@ -383,7 +386,9 @@ def minimize_FF(
 
     likelihood_func = LikelihoodVectorized(
         pvec_min_list,
-        targetcomputer)
+        targetcomputer,
+        N_sys_per_batch = N_sys_per_likelihood_batch
+        )
 
     x0 = copy.deepcopy(likelihood_func.pvec[:])
     x0_ref = copy.deepcopy(likelihood_func.pvec[:])
@@ -670,7 +675,7 @@ def set_parameters_remote(
             if not failed:
             
                 args = worker_id_dict[worker_id[0]]
-                ast, _, _, _, _, _, _, _, _, _ = args
+                ast, _, _, _, _, _, _, _, _, _, _ = args
                 _, _, type_ = ast
 
                 type_i = type_[0]
@@ -782,7 +787,7 @@ def set_parameters_remote(
             resubmit_list = retrieve_failed_workers(worker_id_list)
             for worker_id in resubmit_list:
                 args = worker_id_dict[worker_id]
-                ast, _system_list_id, _targetcomputer_id, _pvec_all_id, _bitvec_type_list_id, _bounds_list, _parm_penalty_split, _mngr_idx_main, _bounds_penalty, _system_idx_list = args
+                ast, _system_list_id, _targetcomputer_id, _pvec_all_id, _bitvec_type_list_id, _bounds_list, _parm_penalty_split, _mngr_idx_main, _bounds_penalty, _N_sys_per_likelihood_batch, _system_idx_list = args
                 try:
                     ray.cancel(worker_id)
                 except:
@@ -797,6 +802,7 @@ def set_parameters_remote(
                         parm_penalty = _parm_penalty_split,
                         pvec_idx_min = [_mngr_idx_main],
                         parallel_targets = False,
+                        N_sys_per_likelihood_batch = _N_sys_per_likelihood_batch,
                         bounds_penalty= _bounds_penalty,
                         use_scipy = True,
                         verbose = verbose,
@@ -863,6 +869,8 @@ class BaseOptimizer(object):
         self.bsm_cache_dict  = dict()
 
         self._initialize_targetcomputer()
+        
+        self._N_sys_per_likelihood_batch = 4
 
 
     def _initialize_targetcomputer(self):
@@ -1511,8 +1519,9 @@ class BaseOptimizer(object):
                     k_values_ij = k_values_ij[split_idxs],
                     grad_diff = self.grad_diff_gs,
                     N_trials = N_trials_gradient,
+                    N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     )
-                args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, mngr_idx, system_idx_list)
+                args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, self._N_sys_per_likelihood_batch, mngr_idx, system_idx_list)
                 worker_id_dict[worker_id] = args
 
         return worker_id_dict, alloc_bitvec_degeneracy_dict
@@ -1805,7 +1814,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     args = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
                     ray.cancel(worker_id, force=True)
-                    _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _mngr_idx, _system_idx_list = args
+                    _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _N_sys_per_likelihood_batch, _mngr_idx, _system_idx_list = args
                     worker_id = get_gradient_scores.remote(
                         ff_parameter_vector = _pvec_id,
                         targetcomputer = _targetcomputer_id,
@@ -1814,8 +1823,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                         k_values_ij = _k_values_ij,
                         grad_diff = _grad_diff,
                         N_trials = _N_trials,
+                        N_sys_per_likelihood_batch = _N_sys_per_likelihood_batch
                         )
-                    args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _mngr_idx, _system_idx_list
+                    args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _N_sys_per_likelihood_batch, _mngr_idx, _system_idx_list
                     worker_id_dict[worker_id] = args
                 import time
                 time.sleep(_TIMEOUT)
@@ -1924,6 +1934,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     pvec_idx_min = [mngr_idx_main],
                     #pvec_idx_min = None,
                     parallel_targets = parallel_targets,
+                    N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list[mngr_idx_main],
                     use_scipy = use_scipy,
                     verbose = self.verbose,
@@ -1939,6 +1950,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 self.parm_penalty_split, 
                 mngr_idx_main, 
                 self.bounds_penalty_list[mngr_idx_main],
+                self._N_sys_per_likelihood_batch,
                 system_idx_list
                 )
             pvec_all[mngr_idx_main].reset(pvec_cp)
@@ -1975,7 +1987,10 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### Should we try to pickup this run from where we stopped last time?
         restart = True,
         ### Benchmark compute time for each batch over `N_trails_opt` replicates.
-        N_trials_opt = 20
+        N_trials_opt = 20,
+        ### dict with system indices for each optimization cycle. If None, will
+        ### be determined randomly.
+        system_idx_dict_batch = None,
         ):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
@@ -2041,8 +2056,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                 print(f"ATTEMPTING SPLIT {iteration_idx}/{self.split_iteration_idx}")
                 found_improvement = False
                 if not restart:
-                    self.system_idx_list_batch = self.get_random_system_idx_list(
-                        N_sys_per_batch_split, N_batches)
+                    if isinstance(system_idx_dict_batch, dict):
+                        self.system_idx_list_batch = system_idx_dict_batch[iteration_idx]
+                    else:
+                        self.system_idx_list_batch = self.get_random_system_idx_list(
+                            N_sys_per_batch_split, N_batches)
 
                 if optimize_system_ordering:
                     if self.verbose:
@@ -2122,6 +2140,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             bitvec_type_list = list(),
                             bounds_list = self.bounds_list,
                             parm_penalty = 1.,
+                            N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                             use_DE=False,
                             bounds_penalty=100.)
                         minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
@@ -2172,6 +2191,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bitvec_type_list = list(),
                                     bounds_list = self.bounds_list,
                                     parm_penalty = 1.,
+                                    N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_DE=False,
                                     bounds_penalty=1000.) 
                                 minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
@@ -2265,12 +2285,14 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     pvec_idx_min = [mngr_idx],
                                     parallel_targets = False,
                                     bounds_penalty= self.bounds_penalty_list[mngr_idx],
+                                    N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_scipy = True,
                                     verbose = self.verbose,
                                     )
                             args = ast, system_list_id, self.targetcomputer_id, pvec_all_id, \
                                    bitvec_type_list_id, self.bounds_list, self.parm_penalty_split, \
-                                   mngr_idx, self.bounds_penalty_list[mngr_idx], sys_idx_pair
+                                   mngr_idx, self.bounds_penalty_list[mngr_idx], self._N_sys_per_likelihood_batch, \
+                                   sys_idx_pair
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
 
