@@ -1488,7 +1488,7 @@ def retrieve_complete_torsiondataset(
                     },
                     "input_specification" : inp,
                     "initial_molecule"    : [qcemol],
-                    "optimization_spec"   : {
+                    "optimization_[Bspec"   : {
                         "keywords": {
                             "program"  : program,
                             "coordsys" : "tric",
@@ -2049,17 +2049,23 @@ def retrieve_dataset(
     name_list: list = list(),
     method: list = list(),
     basis: list = list(),
-    element_list: list = list(),
     driver: str = "hessian",
+    element_list: list = list(),
     with_units: bool = True,
     merge: bool = True,
     fractal_client=None):
+    
+    import qcportal as ptl
 
-    driver = driver.lower()
+    if driver.lower() == "hessian":
+        driver = ptl.singlepoint.SinglepointDriver.hessian
+    elif driver.lower() == "gradient":
+        driver = ptl.singlepoint.SinglepointDriver.gradient
+    else:
+        driver = None
 
     if fractal_client == None:
-        import qcportal as ptl
-        fractal_client = ptl.FractalClient("https://api.qcarchive.molssi.org:443/")
+        fractal_client = ptl.PortalClient("https://api.qcarchive.molssi.org:443/")
 
     method_cp = [m.lower() for m in method]
     basis_cp  = [b.lower() for b in basis]
@@ -2079,24 +2085,21 @@ def retrieve_dataset(
     element_list_cp = sorted(element_list_cp)
 
     if not dataset_name_list:
-        dataset_name_list = fractal_client.list_collections(
-            "Dataset", 
+        dataset_name_list = fractal_client.list_datasets(
+            "singlepoint", 
             aslist=True)
 
     dataset_dict = dict()
     exclude_list = list()
     for dataset_name in dataset_name_list:
         print(f"Scanning dataset {dataset_name} ...")
-        ds = fractal_client.get_collection(
-            'Dataset', 
+        ds = fractal_client.get_dataset(
+            'singlepoint', 
             dataset_name
             )
-        if len(list(ds.data.history)) == 0:
+        if len(list(ds.entry_names)) == 0:
             continue
-        spec_values = list(ds.data.history)[0]
-        spec_dict   = dict(zip(ds.data.history_keys, spec_values))
-        if not spec_dict['driver'].lower() == driver:
-            continue
+        
         if method_cp:
             if not spec_dict['method'].lower() in method_cp:
                 continue
@@ -2104,51 +2107,46 @@ def retrieve_dataset(
             if not spec_dict['basis'].lower() in basis_cp:
                 continue
 
-        for row_idx, row in ds.get_entries().iterrows():
-            name = row["name"]
+        for name in ds.entry_names:
             print(f"Scanning entry {name} ...")
             if name_list:
                 if not name in name_list:
                     continue
-
-            molecule_id   = row["molecule_id"]
-            try:
-                result_record = fractal_client.query_results(
-                    molecule=molecule_id,
-                    driver=driver,
-                    method=spec_dict['method'],
-                    basis=spec_dict['basis'])[0]
-                if not result_record.status == "COMPLETE":
+            entry = ds.get_entry(name)
+            molecule_id = entry.molecule.id
+            for result_record in fractal_client.query_singlepoints(molecule_id=molecule_id, driver=driver):
+                if method_cp:
+                    if not result_record.specification.method.lower() == method_cp:
+                        continue
+                if basis_cp:
+                    if not result_record.specification.basis.lower() == basis_cp:
+                        continue
+                if not result_record.status.lower() == 'complete':
                     warnings.warn(
                         f"Could not retrieve {name}. Status {result_record.status}. Skipping."
                         )
                     continue
-            except:
-                warnings.warn(
-                    f"Could not retrieve {name}."
-                    )
-                continue
             
-            qcmol              = result_record.get_molecule()
-            qcmol_element_list = copy.copy(qcmol.atomic_numbers)
-            qcmol_element_list = list(set(qcmol_element_list))
-            qcmol_element_list = sorted(qcmol_element_list)
-            if element_list_cp:
-                if not qcmol_element_list == element_list_cp:
-                    continue
-            cp_result  = np.copy(result_record.return_result).tolist()
-            cp_geo     = np.copy(qcmol.geometry)
-            if with_units:
-                ### Convert to Hessian units
-                if driver == "hessian":
-                    cp_result *= _FORCE_AU 
-                    cp_result *= _LENGTH_AU**-1
-                cp_geo *= _LENGTH_AU
+                qcmol              = result_record.molecule
+                qcmol_element_list = copy.copy(qcmol.atomic_numbers)
+                qcmol_element_list = list(set(qcmol_element_list))
+                qcmol_element_list = sorted(qcmol_element_list)
+                if element_list_cp:
+                    if not qcmol_element_list == element_list_cp:
+                        continue
+                cp_result  = np.copy(result_record.return_result).tolist()
+                cp_geo     = np.copy(qcmol.geometry)
+                if with_units:
+                    ### Convert to Hessian units
+                    if driver == "hessian":
+                        cp_result *= _FORCE_AU 
+                        cp_result *= _LENGTH_AU**-1
+                    cp_geo *= _LENGTH_AU
 
-            dataset_dict[name] = {
-                "result"    : cp_result,
-                "structure" : cp_geo
-            }
+                dataset_dict[name] = {
+                    "result"    : cp_result,
+                    "structure" : cp_geo
+                }
 
     return dataset_dict
 
@@ -2180,8 +2178,8 @@ def retrieve_optimization_dataset(
             "Could not read all patterns in pattern_list.")
 
     if fractal_client == None:
-        import qcfractal.interface as ptl
-        fractal_client = ptl.FractalClient(
+        import qcportal as ptl
+        fractal_client = ptl.PortalClient(
             "https://api.qcarchive.molssi.org:443/"
             )
 
@@ -2203,8 +2201,8 @@ def retrieve_optimization_dataset(
     element_list_cp = sorted(element_list_cp)
 
     if not dataset_name_list:
-        dataset_name_list = fractal_client.list_collections(
-            "OptimizationDataset", 
+        dataset_name_list = fractal_client.list_datasets(
+            "optimization", 
             aslist=True
             )
 
@@ -2212,13 +2210,13 @@ def retrieve_optimization_dataset(
     exclude_list = list()
     for dataset_name in dataset_name_list:
         print(f"Scanning dataset {dataset_name} ...")
-        ds = fractal_client.get_collection(
-            'OptimizationDataset',
+        ds = fractal_client.get_dataset(
+            'optimization',
              dataset_name
             )
 
         if not name_list:
-            name_list_query = ds.df.index
+            name_list_query = ds.entry_names
         else:
             name_list_query = copy.copy(name_list)
 
@@ -2229,23 +2227,23 @@ def retrieve_optimization_dataset(
                 entry    = ds.get_entry(name)
                 qcrecord = ds.get_record(
                     name, 
-                    specification="default"
+                    specification_name="default"
                     )
             except:
                 continue
-            if not qcrecord.status == "COMPLETE":
+            if not qcrecord.status.lower() == "complete":
                 warnings.warn(
                     f"Could not retrieve {name}. Status {qcrecord.status}. Skipping."
                     )
                 continue
             if method_cp:
-                if not qcrecord.qc_spec.method.lower() in method_cp:
+                if not qcrecord.specification.qc_specification.method.lower() in method_cp:
                     continue
             if basis_cp:
-                if not qcrecord.qc_spec.basis.lower() in basis_cp:
+                if not qcrecord.specification.qc_specification.basis.lower() in basis_cp:
                     continue
 
-            qcmol = qcrecord.get_final_molecule()
+            qcmol = qcrecord.final_molecule
             try:
                 ### First try openff
                 rdmol = Molecule.from_qcschema(entry).to_rdkit()
@@ -2306,7 +2304,7 @@ def retrieve_optimization_dataset(
                     warnings.warn(f"Could not generate forces for {name}. Skipping.")
                     continue
                 zmat = ZMatrix(rdmol)
-                geo  = qcrecord.get_final_molecule().geometry
+                geo  = qcrecord.final_molecule.geometry
                 z_crds_initial = zmat.build_z_crds(geo * _LENGTH_AU)
                 worker_list = list()
                 for _ in range(n_samples):
@@ -2344,8 +2342,8 @@ def retrieve_optimization_dataset(
                         "molecule": qcemol,
                         "driver": "gradient",
                         "model": {
-                            "method": qcrecord.qc_spec.method, 
-                            "basis": qcrecord.qc_spec.basis
+                            "method": qcrecord.specification.qc_specification.method, 
+                            "basis": qcrecord.specification.qc_specification.basis
                             }
                         }
                     worker_id = qcng_worker(
@@ -2376,13 +2374,13 @@ def retrieve_optimization_dataset(
                     geo_list.append(geo_cp)
 
             else:
-                for result_records in qcrecord.get_trajectory():
-                    force_cp  = np.copy(-1. * result_records.return_result).tolist()
+                for result_records in qcrecord.trajectory:
+                    _return_result = np.array(result_records.return_result)
+                    force_cp  = np.copy(-1. * _return_result).tolist()
                     if with_units:
                         force_cp *= _FORCE_AU
                     force_list.append(force_cp)
-                for qcmol in qcrecord.get_molecular_trajectory():
-                    geo_cp  = np.copy(qcmol.geometry).tolist()
+                    geo_cp  = np.copy(result_records.molecule.geometry).tolist()
                     if with_units:
                         geo_cp *= _LENGTH_AU
                     geo_list.append(geo_cp)
@@ -2392,9 +2390,9 @@ def retrieve_optimization_dataset(
                         ene_cp = ene * _ENERGY_AU
                     ene_list.append(ene_cp)
 
-            final_geo = qcrecord.get_final_molecule().geometry
+            final_geo = qcrecord.final_molecule.geometry
             final_geo = np.copy(final_geo).tolist()
-            final_ene = qcrecord.get_final_energy()
+            final_ene = qcrecord.energies
 
             if with_units:
                 final_geo *= _LENGTH_AU
@@ -2449,7 +2447,7 @@ def retrieve_torsiondrive_dataset(
 
     if fractal_client == None:
         import qcportal as ptl
-        fractal_client = ptl.FractalClient(
+        fractal_client = ptl.PortalClient(
             "https://api.qcarchive.molssi.org:443/")
 
     method_cp = [m.lower() for m in method]
@@ -2470,21 +2468,21 @@ def retrieve_torsiondrive_dataset(
     element_list_cp = sorted(element_list_cp)
 
     if not dataset_name_list:
-        dataset_name_list = fractal_client.list_collections(
-            "TorsionDriveDataset", 
+        dataset_name_list = fractal_client.list_datasets(
+            "torsiondrive", 
             aslist=True)
 
     dataset_dict = dict()
     exclude_list = list()
     for dataset_name in dataset_name_list:
         print(f"Scanning dataset {dataset_name} ...")
-        ds = fractal_client.get_collection(
-            'TorsionDriveDataset',
+        ds = fractal_client.get_dataset(
+            'torsiondrive',
              dataset_name
              )
 
         if not name_list:
-            name_list_query = ds.df.index
+            name_list_query = ds.entry_names
         else:
             name_list_query = copy.copy(name_list)
 
@@ -2495,36 +2493,27 @@ def retrieve_torsiondrive_dataset(
                 entry       = ds.get_entry(name)
                 qcrecord_td = ds.get_record(
                     name, 
-                    specification="default"
+                    specification_name="default"
                     )
             except:
                 continue
 
-            opt_history = qcrecord_td.dict()["optimization_history"]
+            opt_history = qcrecord_td.minimum_optimizations
             try:
-                dih_vals_list = opt_history.keys()
+                dih_vals_list = list(opt_history.keys())
             except:
                 warnings.warn(f"Could not retrieve {name}. Skipping.")
                 continue
 
-            if qcrecord_td.status != "COMPLETE":
-                warnings.warn(
-                    f"Could not retrieve {name}. Status {qcrecord_td.status}. Skipping.")
-                continue
-
             if method_cp:
-                if not qcrecord_td.qc_spec.method.lower() in method_cp:
+                if not qcrecord_td.specification.qc_specification.method.lower() in method_cp:
                     continue
             if basis_cp:
-                if not qcrecord_td.qc_spec.basis.lower() in basis_cp:
+                if not qcrecord_td.specification.qc_specification.basis.lower() in basis_cp:
                     continue
-            
+
             try:
-                qcmol = qcrecord_td.get_final_molecules()[
-                    list(
-                        qcrecord_td.get_final_molecules().keys()
-                        )[0]
-                    ]
+                qcmol = qcrecord_td.minimum_optimizations[dih_vals_list[0]].final_molecule
             except:
                 continue
             try:
@@ -2563,7 +2552,7 @@ def retrieve_torsiondrive_dataset(
                         exclude_list.append(Chem.MolToSmiles(rdmol))
                     continue
 
-            dih_idxs   = qcrecord_td.keywords.dihedrals
+            dih_idxs   = qcrecord_td.specification.keywords.dihedrals
             N_torsions = len(dih_idxs)
             
             final_geo = list()
@@ -2576,15 +2565,11 @@ def retrieve_torsiondrive_dataset(
             force_list = list()
 
             for dih_vals in dih_vals_list:
-                ### TODO: This will fail with multi-dihedral scans.
-                ###       Find a better way to convert str->float that
-                ###       won't break with multi-dihedrals.
-                dih_vals_float = dih_vals.replace("[","")
-                dih_vals_float = dih_vals_float.replace("]","")
-                dih_vals_float = dih_vals_float.split(",")
-                dih_vals_float = [float(x) for x in dih_vals_float]
+                if qcrecord_td.minimum_optimizations[dih_vals].status.lower() != 'complete':
+                    continue
+                dih_vals_float = np.array(list(dih_vals), dtype=float)
                 try:
-                    qcmol = qcrecord_td.get_final_molecules(dih_vals)
+                    qcmol = qcrecord_td.minimum_optimizations[dih_vals].final_molecule
                 except:
                     warnings.warn(f"Could not retrieve {name}, {dih_vals}. Skipping.")
                     continue
@@ -2597,7 +2582,7 @@ def retrieve_torsiondrive_dataset(
                         )
                 if not mol_has_hbond:
                     geo_cp  = np.copy(qcmol.geometry).tolist()
-                    ene_cp  = qcrecord_td.get_final_energies(dih_vals)
+                    ene_cp  = qcrecord_td.final_energies[dih_vals]
                     if with_units:
                         geo_cp *= _LENGTH_AU
                         ene_cp *= _ENERGY_AU
@@ -2622,16 +2607,16 @@ def retrieve_torsiondrive_dataset(
                 if extra_data:
                     ### Loop over all non-eq geometries for dih coordinate
                     ### from minimization trajecory
-                    for qcrecord in fractal_client.query_procedures(opt_history[str(dih_vals)]):
-                        if qcrecord.status != "COMPLETE":
+                    for qcrecord in qcrecord_td.optimizations[dih_vals]:
+                        if qcrecord.status.lower() != 'complete':
                             continue
-                        for result_records in qcrecord.get_trajectory():
-                            force_cp  = np.copy(-1. * result_records.return_result).tolist()
+                        for result_records in qcrecord.trajectory:
+                            _return_result = np.array(result_records.return_result)
+                            force_cp  = np.copy(-1. * _return_result).tolist()
                             if with_units:
                                 force_cp *= _FORCE_AU
                             force_list.append(force_cp)
-                        for qcmol in qcrecord.get_molecular_trajectory():
-                            geo_cp  = np.copy(qcmol.geometry).tolist()
+                            geo_cp  = np.copy(result_records.molecule.geometry).tolist()
                             if with_units:
                                 geo_cp *= _LENGTH_AU
                             geo_list.append(geo_cp)
