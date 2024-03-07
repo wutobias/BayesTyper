@@ -867,10 +867,10 @@ class BaseOptimizer(object):
 
         self.parm_mngr_cache_dict = dict()
         self.bsm_cache_dict  = dict()
-
-        self._initialize_targetcomputer()
         
         self._N_sys_per_likelihood_batch = 4
+
+        self._initialize_targetcomputer()
 
 
     def _initialize_targetcomputer(self):
