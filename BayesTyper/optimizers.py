@@ -1363,23 +1363,56 @@ class BaseOptimizer(object):
         self,
         N_sys_per_batch,
         N_batches,
+        cluster_systems = False,
         ):
+        
+        if cluster_systems:
+            from rdkit.Chem import rdMolDescriptors as rdmd
+            from rdkit.Chem import DataStructs
+            import numpy as np
+            from scipy import cluster
+            from scipy.spatial import distance
+            
+            nBits=2048
+            fp_list = np.zeros((self.N_systems, nBits), dtype=np.int8)
+            for sys_idx, sys in enumerate(self.system_list):
+                fp = rdmd.GetMorganFingerprintAsBitVect(sys.rdmol, 3, nBits=nBits)
+                arr = np.zeros((0,), dtype=np.int8)
+                DataStructs.ConvertToNumpyArray(fp,arr)
+                fp_list[sys_idx,:] = arr
+                
+            obs = cluster.vq.whiten(fp_list.astype(float))
+            centroid, label = cluster.vq.kmeans2(obs, N_sys_per_batch)
+            label_re = [list() for _ in range(N_sys_per_batch)]
+            for i in range(self.N_systems):
+                label_re[label[i]] = i
+            system_idx_list_batch = tuple()
+            for _ in range(N_batches):
+                sys_list = tuple()
+                for k in range(N_sys_per_batch):
+                    i = int(np.random.choice(label_re[k]))
+                    sys_list += (i,)
+                sys_list = list(sys_list)
+                sys_list = tuple(sorted(sys_list))
+                system_idx_list_batch += tuple([sys_list])
 
-        system_idx_list = np.arange(
-            self.N_systems, 
-            dtype=int
-            )
+        else:
+            system_idx_list = np.arange(
+                self.N_systems, 
+                dtype=int
+                )
 
-        if not (N_sys_per_batch < self.N_systems):
-            N_batches = 1
+            if not (N_sys_per_batch < self.N_systems):
+                N_batches = 1
 
-        system_idx_list_batch = tuple()
-        for _ in range(N_batches):
-            np.random.shuffle(system_idx_list)
-            sys_list = system_idx_list[:N_sys_per_batch].tolist()
-            sys_list = tuple(sorted(sys_list))
-            system_idx_list_batch += tuple([sys_list])
+            system_idx_list_batch = tuple()
+            for _ in range(N_batches):
+                np.random.shuffle(system_idx_list)
+                sys_list = system_idx_list[:N_sys_per_batch].tolist()
+                sys_list = tuple(sorted(sys_list))
+                system_idx_list_batch += tuple([sys_list])
 
+        print(system_idx_list_batch)
         return system_idx_list_batch
 
 
@@ -1991,6 +2024,8 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### dict with system indices for each optimization cycle. If None, will
         ### be determined randomly.
         system_idx_dict_batch = None,
+        ### Whether to sample systems from clustering
+        cluster_systems = False,
         ):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
@@ -2060,7 +2095,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         self.system_idx_list_batch = system_idx_dict_batch[iteration_idx]
                     else:
                         self.system_idx_list_batch = self.get_random_system_idx_list(
-                            N_sys_per_batch_split, N_batches)
+                            N_sys_per_batch_split, N_batches, cluster_systems=cluster_systems)
 
                 if optimize_system_ordering:
                     if self.verbose:
