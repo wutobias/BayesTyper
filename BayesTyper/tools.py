@@ -1238,22 +1238,24 @@ def local_qcng_worker(inp, local_options, program=None, procedure=None):
     import os
 
     if "SCRATCH" in os.environ:
-        qcng.get_config(local_options={"scratch_directory": "$SCRATCH"})
+        qcng.get_config(task_config={"scratch_directory": "$SCRATCH"})
+        local_options["scratch_directory"] = os.environ["SCRATCH"]
     else:
-        qcng.get_config(local_options={"scratch_directory": "/tmp"})
+        qcng.get_config(task_config={"scratch_directory": "/tmp"})
+        local_options["scratch_directory"] = "/tmp"
 
     if procedure == None:
         ret = qcng.compute(
             inp, 
             program,
-            local_options=local_options,
+            task_config=local_options,
             )
         return ret
     else:
         pro = qcng.compute_procedure(
             inp, 
             procedure,
-            local_options=local_options,
+            task_config=local_options,
         )
         return pro
 
@@ -1426,6 +1428,7 @@ def retrieve_complete_torsiondataset(
     check_Hbond = True,):
 
     import qcelemental as qcel
+    import qcengine as qcng
 
     dataset_dict = dict()
     worker_dict  = dict()
@@ -1463,8 +1466,7 @@ def retrieve_complete_torsiondataset(
 
         ### Generate a reasonable conformer
         offmol.generate_conformers(
-            n_conformers=n_conformers,
-            rms_cutoff=0.5 * unit.angstrom
+            n_conformers=n_conformers
         )
         qcentry = offmol.to_qcschema()
         ### First minimize energy for everything
@@ -1606,6 +1608,7 @@ def retrieve_complete_dataset(
     generate_forces_torsions = False):
 
     import qcelemental as qcel
+    import qcengine as qcng
 
     if program in ["psi4"]:
         numerical_hessian = False
@@ -1631,8 +1634,7 @@ def retrieve_complete_dataset(
         ### GENERATE CONFORMERS ###
         ### =================== ###
         offmol.generate_conformers(
-            n_conformers=n_conformers,
-            rms_cutoff=0.5 * unit.angstrom
+            n_conformers=n_conformers
         )
         qcentry = offmol.to_qcschema()
 
@@ -2167,6 +2169,7 @@ def retrieve_optimization_dataset(
     n_samples: int = 100):
 
     import qcelemental as qcel
+    import qcengine as qcng
 
     ps = Chem.SmilesParserParams()
     ps.removeHs = False
