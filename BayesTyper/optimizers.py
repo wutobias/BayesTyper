@@ -1373,7 +1373,7 @@ class BaseOptimizer(object):
             from scipy import cluster
             from scipy.spatial import distance
             
-            nBits=2048
+            nBits=1024
             fp_list = np.zeros((self.N_systems, nBits), dtype=np.int8)
             for sys_idx, sys in enumerate(self.system_list):
                 fp = rdmd.GetMorganFingerprintAsBitVect(sys.rdmol, 3, nBits=nBits)
@@ -1382,15 +1382,19 @@ class BaseOptimizer(object):
                 fp_list[sys_idx,:] = arr
                 
             obs = cluster.vq.whiten(fp_list.astype(float))
-            centroid, label = cluster.vq.kmeans2(obs, N_sys_per_batch)
+            centroid, label = cluster.vq.kmeans2(obs, N_sys_per_batch, iter=100)
             label_re = [list() for _ in range(N_sys_per_batch)]
             for i in range(self.N_systems):
-                label_re[label[i]] = i
+                k = label[i]
+                label_re[k].append(i)
             system_idx_list_batch = tuple()
             for _ in range(N_batches):
                 sys_list = tuple()
                 for k in range(N_sys_per_batch):
-                    i = int(np.random.choice(label_re[k]))
+                    if len(label_re[k]) > 0:
+                        i = int(np.random.choice(label_re[k]))
+                    else:
+                        i = int(np.random.randint(0, self.N_systems))
                     sys_list += (i,)
                 sys_list = list(sys_list)
                 sys_list = tuple(sorted(sys_list))
@@ -1412,7 +1416,6 @@ class BaseOptimizer(object):
                 sys_list = tuple(sorted(sys_list))
                 system_idx_list_batch += tuple([sys_list])
 
-        print(system_idx_list_batch)
         return system_idx_list_batch
 
 
