@@ -2064,6 +2064,8 @@ class ForceFieldOptimizer(BaseOptimizer):
             restart = False
         if not hasattr(self, "accepted_counter"):
             restart = False
+        if not hasattr(self, "_N_sys_per_likelihood_batch"):
+            self._N_sys_per_likelihood_batch = 4
 
         if not restart:
             self.system_idx_list_batch = []
