@@ -1401,6 +1401,7 @@ class BaseOptimizer(object):
                 system_idx_list_batch += tuple([sys_list])
 
         else:
+            import numpy as np
             system_idx_list = np.arange(
                 self.N_systems, 
                 dtype=int
