@@ -630,7 +630,6 @@ def remove_types(
                 "Parameter Manager not understood."
                 )
 
-
 def generate_systemmanager(
     smiles_list,
     systemmanager=None, 
@@ -747,11 +746,14 @@ def generate_systemmanager(
                 optdataset_dict[smiles].keys()
             )[0]
             if "qcentry" in optdataset_dict[smiles][key]:
-                sys = system.from_qcschema(
-                    optdataset_dict[smiles][key]["qcentry"],
-                    smiles,
-                    forcefield_name,
-                )
+                try:
+                    sys = system.from_qcschema(
+                        optdataset_dict[smiles][key]["qcentry"],
+                        smiles,
+                        forcefield_name,
+                    )
+                except:
+                    continue
             else:
                 continue
         elif use_torsion:
@@ -762,11 +764,14 @@ def generate_systemmanager(
                 torsiondataset_dict[smiles][key0].keys()
             )[0]
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
-                sys = system.from_qcschema(
-                    torsiondataset_dict[smiles][key0][key1]["qcentry"],
-                    smiles,
-                    forcefield_name,
-                )
+                try:
+                    sys = system.from_qcschema(
+                        torsiondataset_dict[smiles][key0][key1]["qcentry"],
+                        smiles,
+                        forcefield_name,
+                    )
+                except:
+                    continue
             else:
                 continue
         else:

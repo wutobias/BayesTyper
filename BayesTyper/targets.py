@@ -218,8 +218,7 @@ class Target(object):
         self.target_strcs = list()
         for target_strc in target_dict["structures"]:
             target_strc = target_strc.value_in_unit(_LENGTH)
-            self.target_strcs.append(target_strc)
-        self.target_strcs = np.array(self.target_strcs) * _LENGTH
+            self.target_strcs.append(np.array(target_strc) * _LENGTH)
 
         self.N_strcs = len(self.target_strcs)
 
