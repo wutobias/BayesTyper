@@ -650,11 +650,13 @@ def train_test_set(dataset_dict, tordataset_dict, N_sets=5, f_training=0.5):
         key_idx_list = np.arange(N_keys, dtype=int)
         np.random.shuffle(key_idx_list)
         N_max = int(f_training * N_keys)
-        for key1 in key_list[:N_max]:
+        for idx in key_idx_list[:N_max]:
+            key1 = key_list[idx]
             training_set_dict[i][key1] = dataset_dict[key1]
             if key1 in tordataset_dict:
                 training_set_torsion_dict[i][key1] = tordataset_dict[key1]
-        for key1 in key_list[N_max:]:
+        for idx in key_idx_list[N_max:]:
+            key1 = key_list[idx]
             test_set_dict[i][key1] = dataset_dict[key1]
             if key1 in tordataset_dict:
                 test_set_torsion_dict[i][key1] = tordataset_dict[key1]
