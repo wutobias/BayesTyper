@@ -649,7 +649,7 @@ def generate_systemmanager(
     use_force = False,
     add_units=False,
     force_projection=False,
-):
+    verbose=False):
 
     __doc__ = """
     This is a helper method for loading a dataset into a systemmanager
@@ -681,6 +681,7 @@ def generate_systemmanager(
 
     """
 
+    import ray
     from . import system
     from .targets import (
         NormalModeTarget, 
@@ -733,27 +734,23 @@ def generate_systemmanager(
         TO_LENGTH_UNIT  = lambda x: x
         TO_HESSIAN_UNIT = lambda x: x
 
-    if systemmanager == None:
-        systemmanager = system.SystemManager()
+    @ray.remote
+    def get_sys(_qcentry, _smiles, _forcefield_name):
+        from . import system
+        sys = system.from_qcschema(
+            _qcentry, _smiles, _forcefield_name)
+        return sys
 
-    N_data_points = 0.
+    worker_id_dict = dict()
     for smiles in smiles_list:
-
-        print("Adding", smiles)
-
         if use_geo or use_offeq or use_force or use_vib:
             key = list(
                 optdataset_dict[smiles].keys()
             )[0]
             if "qcentry" in optdataset_dict[smiles][key]:
-                try:
-                    sys = system.from_qcschema(
-                        optdataset_dict[smiles][key]["qcentry"],
-                        smiles,
-                        forcefield_name,
-                    )
-                except:
-                    continue
+                worker_id = get_sys.remote(
+                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name)
+                worker_id_dict[worker_id] = smiles
             else:
                 continue
         elif use_torsion:
@@ -764,17 +761,30 @@ def generate_systemmanager(
                 torsiondataset_dict[smiles][key0].keys()
             )[0]
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
-                try:
-                    sys = system.from_qcschema(
-                        torsiondataset_dict[smiles][key0][key1]["qcentry"],
-                        smiles,
-                        forcefield_name,
-                    )
-                except:
-                    continue
+                worker_id = get_sys.remote(
+                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name)
+                worker_id_dict[worker_id] = smiles
             else:
                 continue
         else:
+            continue
+
+    if systemmanager == None:
+        systemmanager = system.SystemManager()
+
+    N_data_points = 0.
+    worker_id_list = list(worker_id_dict.keys())
+    while worker_id_list:
+
+        [worker_id], worker_id_list = ray.wait(worker_id_list)
+        smiles = worker_id_dict[worker_id]
+
+        if verbose:
+            print("Adding", smiles)
+
+        try:
+            sys = ray.get(worker_id)
+        except:
             continue
 
         smi = Chem.MolToSmiles(
