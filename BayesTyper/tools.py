@@ -654,7 +654,7 @@ def train_test_set(dataset_dict, tordataset_dict, N_sets=5, f_training=0.5):
             training_set_dict[i][key1] = dataset_dict[key1]
             if key1 in tordataset_dict:
                 training_set_torsion_dict[i][key1] = tordataset_dict[key1]
-        for key1 in key_list[:N_max]:
+        for key1 in key_list[N_max:]:
             test_set_dict[i][key1] = dataset_dict[key1]
             if key1 in tordataset_dict:
                 test_set_torsion_dict[i][key1] = tordataset_dict[key1]
@@ -845,7 +845,8 @@ def generate_systemmanager(
         _ANGLE, 
         _FORCE, 
         _ENERGY_PER_MOL, 
-        _WAVENUMBER
+        _WAVENUMBER,
+        _TIMEOUT
         )
     from rdkit import Chem
 
