@@ -1099,18 +1099,17 @@ class ParameterManager(object):
             force, 
             system
             )
-        if self.force_entity_list.size == 0:
-            _force_entity_list = np.array(
-                force_entity_list,
-                dtype=int
-                )
-        else:
-            _force_entity_list = np.append(
-                self.force_entity_list, 
-                force_entity_list,
-                axis=0
-                ).astype(int)
-        self.force_entity_list = _force_entity_list
+        if len(force_entity_list) > 0:
+            if self.force_entity_list.size == 0:
+                _force_entity_list = np.array(
+                    force_entity_list,
+                    dtype=int)
+            else:
+                _force_entity_list = np.append(
+                    self.force_entity_list, 
+                    force_entity_list,
+                    axis=0).astype(int)
+            self.force_entity_list = _force_entity_list
 
         ### Now add them into forcegroups
         N_force_entites = len(forcecontainer_list)
