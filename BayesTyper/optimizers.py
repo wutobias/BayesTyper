@@ -830,6 +830,7 @@ class BaseOptimizer(object):
         self, 
         system_list, 
         name="BaseOptimizer",
+        N_sys_per_likelihood_batch = 4,
         verbose=False):
 
         self._max_neighbor = 3
@@ -867,8 +868,8 @@ class BaseOptimizer(object):
 
         self.parm_mngr_cache_dict = dict()
         self.bsm_cache_dict  = dict()
-        
-        self._N_sys_per_likelihood_batch = 4
+
+        self._N_sys_per_likelihood_batch = N_sys_per_likelihood_batch
 
         self._initialize_targetcomputer()
 
@@ -1572,9 +1573,11 @@ class ForceFieldOptimizer(BaseOptimizer):
         parm_penalty_split = 1.,
         parm_penalty_merge = 1.,
         name="ForceFieldOptimizer",
+        N_sys_per_likelihood_batch = 4,
         verbose=False):
 
-        super().__init__(system_list, name, verbose)
+        super().__init__(
+            system_list, name, N_sys_per_likelihood_batch, verbose)
 
         self.parm_penalty_split = parm_penalty_split
         self.parm_penalty_merge = parm_penalty_merge
