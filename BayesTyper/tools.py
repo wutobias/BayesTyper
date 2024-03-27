@@ -779,6 +779,14 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
     return dataset_dict, tordataset_dict
 
 
+@ray.remote
+def parameterize_system(_qcentry, _smiles, _forcefield_name):
+    from . import system
+    sys = system.from_qcschema(
+        _qcentry, _smiles, _forcefield_name)
+    return sys
+
+
 def generate_systemmanager(
     smiles_list,
     systemmanager=None, 
@@ -884,13 +892,6 @@ def generate_systemmanager(
         TO_LENGTH_UNIT  = lambda x: x
         TO_HESSIAN_UNIT = lambda x: x
 
-    @ray.remote
-    def get_sys(_qcentry, _smiles, _forcefield_name):
-        from . import system
-        sys = system.from_qcschema(
-            _qcentry, _smiles, _forcefield_name)
-        return sys
-
     worker_id_dict = dict()
     for smiles in smiles_list:
         if use_geo or use_offeq or use_force or use_vib:
@@ -898,7 +899,7 @@ def generate_systemmanager(
                 optdataset_dict[smiles].keys()
             )[0]
             if "qcentry" in optdataset_dict[smiles][key]:
-                worker_id = get_sys.remote(
+                worker_id = parameterize_system.remote(
                     optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name)
                 worker_id_dict[worker_id] = smiles
             else:
@@ -911,7 +912,7 @@ def generate_systemmanager(
                 torsiondataset_dict[smiles][key0].keys()
             )[0]
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
-                worker_id = get_sys.remote(
+                worker_id = parameterize_system.remote(
                     torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name)
                 worker_id_dict[worker_id] = smiles
             else:
