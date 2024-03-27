@@ -237,9 +237,9 @@ def compute_bitvector_product(
 
 @ray.remote
 def prepare_encoding(
-    b,
-    bn,
-    a,
+    b_list,
+    bn_list,
+    a_list,
     _max_neighbor,
     max_neighbor,
     primitive_mapping_neighbor_dict,
@@ -248,6 +248,9 @@ def prepare_encoding(
     max_on
     ):
 
+    assert len(b_list) == len(bn_list)
+    assert len(b_list) == len(a_list)
+
     import itertools
     from . import arrays
 
@@ -255,44 +258,45 @@ def prepare_encoding(
     bitvec_list = set()
 
     vec_length = len(primitive_mapping_dict)
-    
-    ### Select neighbor
-    for n in itertools.permutations(range(_max_neighbor), max_neighbor):
-        ### Select bit shift
-        for i in itertools.permutations(range(_max_neighbor), max_neighbor):
-            bnew_n = arrays.bitvec(0, maxbits=maxbits)
-            bnew   = arrays.bitvec(0, maxbits=maxbits)
-            for key in primitive_mapping_neighbor_dict:
-                mapped_idx_list = primitive_mapping_neighbor_dict[key]
-                for _n, _i in zip(n,i):
-                    mapped_idx           = mapped_idx_list[_n]
-                    mapped_idx_new       = mapped_idx_list[_i] + vec_length
-                    bnew_n[mapped_idx_new] = bn[mapped_idx]
-            for key in primitive_mapping_dict:
-                mapped_idx     = primitive_mapping_dict[key]
-                mapped_idx_new = primitive_mapping_dict[key]
-                bnew_n[mapped_idx_new] = b[mapped_idx]
-                bnew[mapped_idx_new]   = b[mapped_idx]
-            on  = float(len(bnew_n.on()))
-            on /= float(maxbits)
-            if on < max_on:
-                key = bnew.v
-                key_n = bnew_n.v
-                if key not in bitvec_list:
-                    bitvec_list.add(key)
-                if key_n not in bitvec_list:
-                    bitvec_list.add(key_n)
-                if key in bitvec_list_alloc_dict:
-                    if a not in bitvec_list_alloc_dict[key]:
-                        bitvec_list_alloc_dict[key].add(a)
-                else:
-                    bitvec_list_alloc_dict[key] = set([a])
 
-                if key_n in bitvec_list_alloc_dict:
-                    if a not in bitvec_list_alloc_dict[key_n]:
-                        bitvec_list_alloc_dict[key_n].add(a)
-                else:
-                    bitvec_list_alloc_dict[key_n] = set([a])
+    for b, bn, a in zip(b_list, bn_list, a_list):
+        ### Select neighbor
+        for n in itertools.permutations(range(_max_neighbor), max_neighbor):
+            ### Select bit shift
+            for i in itertools.permutations(range(_max_neighbor), max_neighbor):
+                bnew_n = arrays.bitvec(0, maxbits=maxbits)
+                bnew   = arrays.bitvec(0, maxbits=maxbits)
+                for key in primitive_mapping_neighbor_dict:
+                    mapped_idx_list = primitive_mapping_neighbor_dict[key]
+                    for _n, _i in zip(n,i):
+                        mapped_idx           = mapped_idx_list[_n]
+                        mapped_idx_new       = mapped_idx_list[_i] + vec_length
+                        bnew_n[mapped_idx_new] = bn[mapped_idx]
+                for key in primitive_mapping_dict:
+                    mapped_idx     = primitive_mapping_dict[key]
+                    mapped_idx_new = primitive_mapping_dict[key]
+                    bnew_n[mapped_idx_new] = b[mapped_idx]
+                    bnew[mapped_idx_new]   = b[mapped_idx]
+                on  = float(len(bnew_n.on()))
+                on /= float(maxbits)
+                if on < max_on:
+                    key = bnew.v
+                    key_n = bnew_n.v
+                    if key not in bitvec_list:
+                        bitvec_list.add(key)
+                    if key_n not in bitvec_list:
+                        bitvec_list.add(key_n)
+                    if key in bitvec_list_alloc_dict:
+                        if a not in bitvec_list_alloc_dict[key]:
+                            bitvec_list_alloc_dict[key].add(a)
+                    else:
+                        bitvec_list_alloc_dict[key] = set([a])
+
+                    if key_n in bitvec_list_alloc_dict:
+                        if a not in bitvec_list_alloc_dict[key_n]:
+                            bitvec_list_alloc_dict[key_n].add(a)
+                    else:
+                        bitvec_list_alloc_dict[key_n] = set([a])
 
     return bitvec_list, bitvec_list_alloc_dict
 
@@ -310,12 +314,15 @@ def and_bitvectors(
     reverse_primitive_mapping_neighbor_dict,
     verbose=False):
 
-    _CHUNK_SIZE_MAX = 50000
-
     if len(bitvec_list) == 0:
         return set()
     elif len(bitvec_list) == 1:
         return set(bitvec_list)
+
+    if len(bitvec_list) > 1000:
+        _CHUNK_SIZE_MAX = 500000
+    else:
+        _CHUNK_SIZE_MAX = 50000
     
     max_on = float(max_on)
     bitvec_list = set(bitvec_list)
@@ -726,7 +733,7 @@ class BitSmartsManager(object):
 
 
     def generate(self, ring_safe=True):
-        
+
         import numpy as np
 
         all_primitives_dict = get_primitives(
@@ -914,25 +921,57 @@ class BitSmartsManager(object):
         if len(allocations) == 0:
             allocations = list(range(self.N_allocs))
 
+        if len(allocations) > 10000:
+            _CHUNK_SIZE_MAX = 1000
+        else:
+            _CHUNK_SIZE_MAX = 100
+
         worker_id_dict = dict()
+
+        b_list = list()
+        bn_list = list()
+        a_list = list()
         for a in allocations:
             v = self.primitive_binary_parent[a]
             if v:
                 for _a in [a, a+self.N_allocs]:
                     b = self.primitive_binary[_a]
                     bn = self.primitive_binary_neighbor[_a]
-                    worker_id = prepare_encoding.remote(
-                        b,
-                        bn,
-                        a, ### This must be `a`, not `_a`
-                        self._max_neighbor,
-                        max_neighbor,
-                        primitive_mapping_neighbor_dict_id,
-                        primitive_mapping_dict_id,
-                        maxbits,
-                        max_on
-                    )
-                    worker_id_dict[worker_id] = b, bn, a
+
+                    b_list.append(b)
+                    bn_list.append(bn)
+                    a_list.append(a)
+
+                    N = len(a_list)
+
+                    if N == _CHUNK_SIZE_MAX:
+                        worker_id = prepare_encoding.remote(
+                            b_list, bn_list, a_list, ### This must be `a`, not `_a`
+                            self._max_neighbor,
+                            max_neighbor,
+                            primitive_mapping_neighbor_dict_id,
+                            primitive_mapping_dict_id,
+                            maxbits,
+                            max_on
+                        )
+                        worker_id_dict[worker_id] = b_list, bn_list, a_list
+                        b_list = list()
+                        bn_list = list()
+                        a_list = list()
+
+        N = len(a_list)
+        if N > 0:
+            worker_id = prepare_encoding.remote(
+                b_list, bn_list, a_list, ### This must be `a`, not `_a`
+                self._max_neighbor,
+                max_neighbor,
+                primitive_mapping_neighbor_dict_id,
+                primitive_mapping_dict_id,
+                maxbits,
+                max_on
+            )
+            worker_id_dict[worker_id] = b_list, bn_list, a_list
+
         bitvec_list = set()
         bitvec_list_alloc_dict = dict()
         worker_id_list = list(worker_id_dict.keys())
@@ -969,9 +1008,7 @@ class BitSmartsManager(object):
                     ray.get(primitive_mapping_neighbor_dict_id)
                     ray.get(primitive_mapping_dict_id)
                     worker_id = prepare_encoding.remote(
-                        b,
-                        bn,
-                        a, ### This must be `a`, not `_a`
+                        b_list, bn_list, a_list, ### This must be `a`, not `_a`
                         self._max_neighbor,
                         max_neighbor,
                         primitive_mapping_neighbor_dict_id,
@@ -979,7 +1016,7 @@ class BitSmartsManager(object):
                         maxbits,
                         max_on
                         )
-                    worker_id_dict[worker_id] = b, bn, a
+                    worker_id_dict[worker_id] = b_list, bn_list, a_list
                 worker_id_list = list(worker_id_dict.keys())
                 import time
                 time.sleep(_TIMEOUT)
