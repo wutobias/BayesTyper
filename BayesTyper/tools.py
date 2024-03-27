@@ -551,7 +551,6 @@ def _remove_types(
                 remove_list.append(type_i)
         for type_i in sorted(remove_list, reverse=True):
             pvec.remove(type_i)
-            pvec.apply_changes()
     if set_inactive:
         pvec.allocations[:] = _INACTIVE_GROUP_IDX
     pvec.apply_changes()
