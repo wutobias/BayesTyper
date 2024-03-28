@@ -1003,7 +1003,7 @@ class BitSmartsManager(object):
                 resubmit_list = retrieve_failed_workers(worker_id_list)
                 for worker_id in resubmit_list:
                     ray.cancel(worker_id, force=True)
-                    b, bn, a = worker_id_dict[worker_id]
+                    b_list, bn_list, a_list = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
                     ray.get(primitive_mapping_neighbor_dict_id)
                     ray.get(primitive_mapping_dict_id)
