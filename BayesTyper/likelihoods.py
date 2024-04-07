@@ -218,10 +218,38 @@ class LikelihoodVectorized(object):
 
         return logP_likelihood
 
+    def _call_local(self, vec, parm_idx_list):
+
+        self.apply_changes(
+            vec, grad=False,
+            parm_idx_list=parm_idx_list)
+
+        if isinstance(parm_idx_list, type(None)):
+            parm_idx_list = list(range(self.N_parms))
+
+        logP_likelihood  = 0.
+        sysname_run_list = list()
+        for sysname in self.openmm_system_dict:
+            if sysname in sysname_run_list:
+                continue
+            _parm_idx_list = self.parm_idx_sysname_dict[sysname]
+            for parm_idx in parm_idx_list:
+                if parm_idx in _parm_idx_list:
+                    _logP_likelihood = self.targetcomputer.__call__(
+                        {sysname:self.openmm_system_dict[sysname]}, False, True)
+                    logP_likelihood += _logP_likelihood
+                    sysname_run_list.append(sysname)
+                    break
+        return logP_likelihood
+
     def __call__(
         self,
         vec,
-        parm_idx_list=None):
+        parm_idx_list=None,
+        local=False):
+
+        if local:
+            return self._call_local(vec, parm_idx_list)
 
         self.apply_changes(
             vec, grad=False,
@@ -275,13 +303,71 @@ class LikelihoodVectorized(object):
 
         return logP_likelihood
 
-    def grad(
+    
+    def _grad_local(
         self, 
         vec, 
         parm_idx_list=None,
         grad_diff=_EPSILON, 
         use_jac=False,
         ):
+
+        import numpy as np
+
+        if not self._three_point:
+            grad_diff *= 2.
+
+        self.apply_changes(
+            vec, grad=True, 
+            parm_idx_list=parm_idx_list, 
+            grad_diff=grad_diff)
+
+        if isinstance(parm_idx_list, type(None)):
+            parm_idx_list = list(range(self.N_parms))
+
+        grad = np.zeros(self.N_parms, dtype=float)
+        for parm_idx in self.openmm_system_fwd_dict:
+            if not parm_idx in parm_idx_list:
+                continue
+            for sys_idx, openmm_system_dict in enumerate(self.openmm_system_fwd_dict[parm_idx]):
+                _logP_likelihood = self.targetcomputer.__call__(openmm_system_dict, False, True)
+                grad[parm_idx] += _logP_likelihood
+
+            if self._three_point:
+                for sys_idx, openmm_system_dict in enumerate(self.openmm_system_bkw_dict[parm_idx]):
+                    _logP_likelihood = self.targetcomputer.__call__(openmm_system_dict, False, True)
+                    grad[parm_idx] -= _logP_likelihood
+        if not self._three_point:
+            for sysname in self.openmm_system_dict:
+                _parm_idx_list = self.parm_idx_sysname_dict[sysname]
+                if len(_parm_idx_list) > 0 and len(parm_idx_list) > 0:
+                    _logP_likelihood = self.targetcomputer.__call__(
+                        {sysname:self.openmm_system_dict[sysname]}, False, True)
+                    for parm_idx in parm_idx_list:
+                        if parm_idx in _parm_idx_list:
+                            grad[parm_idx] -= _logP_likelihood
+
+        if use_jac:
+            grad -= np.log(self.jacobian)
+
+        if self._three_point:
+            grad *= 1./(grad_diff * 2.)
+        else:
+            grad *= 1./grad_diff
+
+        return grad
+
+    def grad(
+        self, 
+        vec, 
+        parm_idx_list=None,
+        grad_diff=_EPSILON, 
+        use_jac=False,
+        local=False
+        ):
+
+        if local:
+            return self._grad_local(vec, parm_idx_list, grad_diff, use_jac)
 
         import numpy as np
 

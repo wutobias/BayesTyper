@@ -23,6 +23,7 @@ from .constants import (_LENGTH,
                         _MIN_TOLERACE,
                         _FORCE,
                         _ATOMIC_MASS,
+                        _VERBOSE,
                         _FORCE_CONSTANT_BOND,
                         _FORCE_CONSTANT_ANGLE,
                         _FORCE_CONSTANT_TORSION)
@@ -47,7 +48,6 @@ class OpenmmEngine(object):
 
     def __init__(self, 
         openmm_system: openmm.openmm.System, 
-        top: app.topology.Topology,
         xyz: np.ndarray,
         restraints_list: list = list(),
         platform_name: str = "CPU",
@@ -55,10 +55,8 @@ class OpenmmEngine(object):
 
         if restraints_list:
             self.openmm_system = copy.deepcopy(openmm_system)
-            self.top           = copy.deepcopy(top)
         else:
             self.openmm_system = openmm_system
-            self.top           = top
 
         self.platform_name       = platform_name
         self.platform_properties = platform_properties
@@ -251,8 +249,11 @@ class OpenmmEngine(object):
         self.openmm_platform   = openmm.Platform.getPlatformByName(
             self.platform_name
             )
+        ### It seems like openmm only requires the topology
+        ### to check for PBC in case that info cannot be derived from 
+        ### the system object alone.
         self.openmm_simulation = openmm.app.Simulation(
-            self.top,
+            openmm.app.Topology(),
             self.openmm_system,
             self.openmm_integrator,
             self.openmm_platform,
@@ -310,8 +311,7 @@ class OpenmmEngine(object):
             for _ in range(1000):
                 self.openmm_simulation.minimizeEnergy(
                     tolerance=crit, 
-                    maxIterations=10
-                    )
+                    maxIterations=10)
                 self.update_state()
                 if abs(self.pot_ene - ene_min_old) < (crit * 10.):
                     break

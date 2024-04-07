@@ -21,6 +21,7 @@ from openmm import unit
 # ==============================================================================
 from .constants import (_LENGTH,
                         _ANGLE,
+                        _FORCE,
                         _UNIT_QUANTITY,
                         _INACTIVE_GROUP_IDX
                         )
@@ -1386,41 +1387,28 @@ class ZMatrix(object):
                         (self.N_atms, 3), dtype=float
                         )
                     wilson_b_row[atm_idxs[:2]] = wilson_b[z_idx][0]
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * unit.dimensionless
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
                 if z_idx > 1:
                     wilson_b_row = np.zeros(
                         (self.N_atms, 3), dtype=float
                         )
                     wilson_b_row[atm_idxs[:3]] = wilson_b[z_idx][1]
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * wilson_b[z_idx][1].unit
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
                 if z_idx > 2:
                     wilson_b_row = np.zeros(
                         (self.N_atms, 3), dtype=float
                         )
                     wilson_b_row[atm_idxs[:4]] = wilson_b[z_idx][2]
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * wilson_b[z_idx][2].unit
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
 
             wilson_b_flat = np.array(wilson_b_flat)
         else:
             wilson_b_flat = wilson_b
 
-        if isinstance(grad_x, _UNIT_QUANTITY):
-            HAS_UNIT  = True
-            grad_unit = grad_x.unit
-        else:
-            HAS_UNIT  = False
-            grad_unit = 1.
-
         if grad_x.ndim != 1:
-            grad_x_flat = grad_x.flatten()
+            grad_x_flat = grad_x.value_in_unit(_FORCE).flatten()
         else:
-            grad_x_flat = grad_x
+            grad_x_flat = grad_x.value_in_unit(_FORCE)
 
         length_wilson_b  = 0
         length_wilson_b += self.N_atms * 3 * (self.N_atms - 1)
@@ -1465,19 +1453,13 @@ class ZMatrix(object):
             for z_idx in range(1, self.N_atms):
                 grad_q_dict[z_idx] = list()
                 if z_idx > 0:
-                    grad_q_dict[z_idx].append(
-                        grad_q[z_counts] * grad_unit
-                        )
+                    grad_q_dict[z_idx].append(grad_q[z_counts])
                     z_counts += 1
                 if z_idx > 1:
-                    grad_q_dict[z_idx].append(
-                        grad_q[z_counts] * grad_unit
-                        )
+                    grad_q_dict[z_idx].append(grad_q[z_counts])
                     z_counts += 1
                 if z_idx > 2:
-                    grad_q_dict[z_idx].append(
-                        grad_q[z_counts] * grad_unit
-                        )
+                    grad_q_dict[z_idx].append(grad_q[z_counts])
                     z_counts += 1
 
             return grad_q_dict
@@ -1507,46 +1489,35 @@ class ZMatrix(object):
             wilson_b[z_idx] = list()
             if z_idx > 0:
                 wilson_b[z_idx].append(
-                    bond_partial(*crds[atm_idxs[:2]])
-                    )
+                    bond_partial(*crds[atm_idxs[:2]]))
             if z_idx > 1:
                 wilson_b[z_idx].append(
                     angle_partial(
-                        *crds[atm_idxs[:3]])
-                    )
+                        *crds[atm_idxs[:3]]).value_in_unit(_ANGLE/_LENGTH))
             if z_idx > 2:
                 wilson_b[z_idx].append(
-                    dihedral_partial(*crds[atm_idxs[:4]])
-                    )
+                    dihedral_partial(*crds[atm_idxs[:4]]).value_in_unit(_ANGLE/_LENGTH))
         if not as_dict:
             wilson_b_flat = list()
             for z_idx in range(1, self.N_atms):
                 atm_idxs = self.z[z_idx]
                 if z_idx > 0:
                     wilson_b_row = np.zeros(
-                        (self.N_atms, 3), dtype=float
-                        )
+                        (self.N_atms, 3), dtype=float)
                     wilson_b_row[atm_idxs[:2]] = wilson_b[z_idx][0]
                     ### This partial has no units!
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * unit.dimensionless
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
                 if z_idx > 1:
                     wilson_b_row = np.zeros(
-                        (self.N_atms, 3), dtype=float
-                        )
+                        (self.N_atms, 3), dtype=float)
                     wilson_b_row[atm_idxs[:3]] = wilson_b[z_idx][1]
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * wilson_b[z_idx][1].unit
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
                 if z_idx > 2:
                     wilson_b_row = np.zeros(
                         (self.N_atms, 3), dtype=float
                         )
                     wilson_b_row[atm_idxs[:4]] = wilson_b[z_idx][2]
-                    wilson_b_flat.append(
-                        wilson_b_row.flatten() * wilson_b[z_idx][2].unit
-                        )
+                    wilson_b_flat.append(wilson_b_row.flatten())
 
             wilson_b_flat = np.array(wilson_b_flat)
             return wilson_b_flat
@@ -1913,20 +1884,24 @@ class ZMatrix(object):
         for z_idx, atm_idxs in self.z.items():
             z_crds_dict[z_idx] = list()
             if z_idx == 0:
-                z_crds_dict[z_idx].append(crds[atm_idxs[0]].in_units_of(_LENGTH))
+                z_crds_dict[z_idx].append(
+                    crds[atm_idxs[0]].value_in_unit(_LENGTH))
             if z_idx > 0:
                 dist = pts_to_bond(crds[atm_idxs[0]],
                                    crds[atm_idxs[1]])
-                z_crds_dict[z_idx].append(dist)
+                z_crds_dict[z_idx].append(
+                    dist.value_in_unit(_LENGTH))
             if z_idx > 1:
                 ang = pts_to_angle(crds[atm_idxs[0]],
                                    crds[atm_idxs[1]],
                                    crds[atm_idxs[2]])
-                z_crds_dict[z_idx].append(ang.in_units_of(_ANGLE))
+                z_crds_dict[z_idx].append(
+                    ang.value_in_unit(_ANGLE))
             if z_idx > 2:
                 dih = pts_to_dihedral(crds[atm_idxs[0]],
                                       crds[atm_idxs[1]],
                                       crds[atm_idxs[2]],
                                       crds[atm_idxs[3]])
-                z_crds_dict[z_idx].append(dih.in_units_of(_ANGLE))
+                z_crds_dict[z_idx].append(
+                    dih.value_in_unit(_ANGLE))
         return z_crds_dict

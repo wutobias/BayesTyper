@@ -29,6 +29,16 @@ from .ray_tools import retrieve_failed_workers
 
 import ray
 
+
+@ray.remote
+def generate_parameter_manager(sys_list, parm_mngr):
+
+    import copy
+    parm_mngr_cp = copy.deepcopy(parm_mngr)
+    for sys in sys_list:
+        parm_mngr_cp.add_system(sys)
+    return parm_mngr_cp
+
 @ray.remote
 def _test_logL(
     _pvec,
@@ -195,7 +205,8 @@ def get_gradient_scores(
     k_values_ij = None,
     grad_diff = _EPSILON_GS,
     N_trials = 5,
-    N_sys_per_likelihood_batch = 4
+    N_sys_per_likelihood_batch = 4,
+    local_targets=True,
     ):
 
     ff_parameter_vector_cp = ff_parameter_vector.copy(
@@ -260,7 +271,8 @@ def get_gradient_scores(
                 ff_parameter_vector_cp[:],
                 parm_idx_list=parm_idx_list,
                 grad_diff=grad_diff,
-                use_jac=False
+                use_jac=False,
+                local=local_targets,
                 )
 
             grad_i = grad[first_parm_i:last_parm_i]
@@ -306,14 +318,14 @@ def minimize_FF(
     parm_penalty,
     pvec_idx_min=None,
     grad_diff=_EPSILON,
-    parallel_targets=True,
+    local_targets=False,
     N_sys_per_likelihood_batch=4,
     bounds_penalty=10.,
     use_scipy=True,
     use_DE=False,
     verbose=False,
     get_timing=False):
-    
+
     if get_timing:
         import time
         time_start = time.time()
@@ -401,7 +413,7 @@ def minimize_FF(
 
     def fun(x):
 
-        likelihood = likelihood_func(x, parm_idx_list=parm_idx_list)
+        likelihood = likelihood_func(x, parm_idx_list=parm_idx_list, local=local_targets)
         AIC_score  = 2. * N_parms_all * parm_penalty - 2. * likelihood
         
         return AIC_score
@@ -417,7 +429,7 @@ def minimize_FF(
 
         _grad = likelihood_func.grad(x, 
             grad_diff=grad_diff, parm_idx_list=parm_idx_list,
-            use_jac=False)
+            use_jac=False, local=local_targets)
         ### Multiply by -2. due to AIC definition
         _grad *= -2.
 
@@ -801,7 +813,7 @@ def set_parameters_remote(
                         bounds_list = _bounds_list,
                         parm_penalty = _parm_penalty_split,
                         pvec_idx_min = [_mngr_idx_main],
-                        parallel_targets = False,
+                        local_targets = False,
                         N_sys_per_likelihood_batch = _N_sys_per_likelihood_batch,
                         bounds_penalty= _bounds_penalty,
                         use_scipy = True,
@@ -1270,6 +1282,9 @@ class BaseOptimizer(object):
         ):
 
         import copy
+        import ray
+
+        _CHUNK_SIZE = 20
 
         if len(system_idx_list) == 0:
             _system_idx_list = list(range(self.N_systems))
@@ -1286,13 +1301,30 @@ class BaseOptimizer(object):
         if key in self.parm_mngr_cache_dict:
             parm_mngr = self.parm_mngr_cache_dict[key]
         else:
-            parm_mngr = copy.deepcopy(
-                self.parameter_manager_list[mngr_idx]
-                )
+            worker_id_list = list()
+            parm_mngr = copy.deepcopy(self.parameter_manager_list[mngr_idx])
+            s_list   = tuple()
+            idx_list = tuple()
             for sys_idx in _system_idx_list:
-                parm_mngr.add_system(
-                    self.system_list[sys_idx]
-                    )
+                s_list   += (self.system_list[sys_idx],)
+                idx_list += (sys_idx,)
+                if len(s_list) == _CHUNK_SIZE:
+                    worker_id = generate_parameter_manager.remote(
+                        s_list, parm_mngr)
+                    worker_id_list.append([worker_id, idx_list])
+                    s_list   = tuple()
+                    idx_list = tuple()
+            if len(s_list) > 0:
+                worker_id = generate_parameter_manager.remote(
+                        s_list, parm_mngr)
+                worker_id_list.append([worker_id, idx_list])
+            sys_counts = 0
+            for worker_id, idx_list in worker_id_list:
+                _parm_mngr = ray.get(worker_id)
+                parm_mngr.add_parameter_manager(_parm_mngr)
+                for sys_idx in idx_list:
+                    parm_mngr.system_list[sys_counts] = self.system_list[sys_idx]
+                    sys_counts += 1
             self.parm_mngr_cache_dict[key] = parm_mngr
 
         return self.parm_mngr_cache_dict[key]
@@ -1557,6 +1589,7 @@ class BaseOptimizer(object):
                     k_values_ij = k_values_ij[split_idxs],
                     grad_diff = self.grad_diff_gs,
                     N_trials = N_trials_gradient,
+                    local_targets=True,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     )
                 args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, self._N_sys_per_likelihood_batch, mngr_idx, system_idx_list)
@@ -1863,6 +1896,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         k_values_ij = _k_values_ij,
                         grad_diff = _grad_diff,
                         N_trials = _N_trials,
+                        local_targets=True,
                         N_sys_per_likelihood_batch = _N_sys_per_likelihood_batch
                         )
                     args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _N_sys_per_likelihood_batch, _mngr_idx, _system_idx_list
@@ -1908,7 +1942,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         mngr_idx_main,
         system_idx_list = list(),
         votes_split_list = list(),
-        parallel_targets = False,
+        local_targets = True,
         ):
 
         use_scipy = True
@@ -1973,7 +2007,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     parm_penalty = self.parm_penalty_split,
                     pvec_idx_min = [mngr_idx_main],
                     #pvec_idx_min = None,
-                    parallel_targets = parallel_targets,
+                    local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list[mngr_idx_main],
                     use_scipy = use_scipy,
@@ -2183,6 +2217,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                             pvec_list = pvec_list,
                             bitvec_type_list = list(),
                             bounds_list = self.bounds_list,
+                            ### This is the only place where we don't want to 
+                            ### do local targets
+                            local_targets = False,
                             parm_penalty = 1.,
                             N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                             use_DE=False,
@@ -2261,7 +2298,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 mngr_idx_main=mngr_idx,
                                 system_idx_list=sys_idx_pair,
                                 votes_split_list=votes_split_list,
-                                parallel_targets=False,
+                                local_targets=False,
                                 )
                             self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
                             for ast in votes_split_list:
@@ -2327,7 +2364,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,
                                     pvec_idx_min = [mngr_idx],
-                                    parallel_targets = False,
+                                    local_targets = False,
                                     bounds_penalty= self.bounds_penalty_list[mngr_idx],
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_scipy = True,

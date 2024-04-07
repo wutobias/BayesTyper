@@ -41,13 +41,12 @@ _NM_TO_BOHR       = 1./0.0529177
 _BOHR_TO_ANGSTROM = 0.529177
 _ANGSTROM_TO_BOHR = 1./0.529177
 
-
 ### Misc constants
 _SEED            = 42
 _UNIT_QUANTITY   = unit.quantity.Quantity
 _INACTIVE_GROUP_IDX = -99
 _TIMEOUT         = 20 # timeout in seconds
-_VERBOSE         = False
+_VERBOSE         = True
 #_EPSILON         = 1.4901161193847656e-08 # finite difference gradient
 _EPSILON         = 1.e-4
 _EPSILON_GS      = 1.e-2 # finitite difference for gradient score

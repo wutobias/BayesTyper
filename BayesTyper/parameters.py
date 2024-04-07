@@ -1062,11 +1062,72 @@ class ParameterManager(object):
 
         return True
 
+    def add_parameter_manager(self, parm_mngr):
+
+        if not type(parm_mngr) == type(self):
+            raise ValueError(
+                f"Added parameter manager must have same type as this parameter manager")
+
+        import numpy as np
+
+        force_group_idx_list = np.copy(parm_mngr.force_group_idx_list).astype(int)
+        for force_group_idx1 in range(parm_mngr.force_group_count):
+            valids = np.where(parm_mngr.force_group_idx_list == force_group_idx1)
+            forcecontainer_1 = parm_mngr.forcecontainer_list[force_group_idx1]
+            force_group_idx = 0
+            is_new = True
+            for forcecontainer_2 in self.forcecontainer_list:
+                if forcecontainer_1 == forcecontainer_2:
+                    is_new = False
+                    break
+                force_group_idx += 1
+            if is_new:
+                self.forcecontainer_list.append(forcecontainer_1)
+            force_group_idx_list[valids] = force_group_idx
+        _force_group_idx_list = np.append(
+            self.force_group_idx_list, force_group_idx_list)
+        self.force_group_idx_list = _force_group_idx_list
+
+        self.system_list.extend(parm_mngr.system_list)
+        self.rdmol_list.extend(parm_mngr.rdmol_list)
+        
+        attributes_list = [
+            "omm_force_list",
+            "atomic_num_list",
+            "atom_list"]
+
+        attributes_np = [
+            "force_entity_list",
+            "system_idx_list",
+            "force_ranks"]
+
+        for attr in attributes_list:
+            l1 = getattr(self, attr)
+            l2 = getattr(parm_mngr, attr)
+            setattr(self, attr, l1+l2)
+        for attr in attributes_np:
+            l1 = getattr(self, attr)
+            l2 = getattr(parm_mngr, attr)
+            if l1.size == 0 and l2.size > 0:
+                setattr(self, attr, l2.astype(int))
+            elif l2.size == 0 and l1.size > 0:
+                setattr(self, attr, l1.astype(int))
+            elif l2.size > 0 and l1.size > 0:
+                if attr == "force_ranks":
+                    l2 = l2 + np.max(l1) + 1
+                elif attr == "system_idx_list":
+                    l2 = l2 + self._N_systems
+                setattr(self, attr, np.append(l1,l2,axis=0).astype(int))
+            else:
+                continue
+        self._N_systems += parm_mngr._N_systems
+
     def add_system(
         self, 
         system: System) -> bool:
 
         from itertools import permutations
+        import copy
 
         found_force = False
         for force_idx, force in enumerate(system.openmm_system.getForces()):
@@ -1082,7 +1143,6 @@ class ParameterManager(object):
 
         self.omm_force_list.append(force_idx)
         self.system_list.append(system)
-        import copy
         self.rdmol_list.append(
             copy.deepcopy(system.rdmol)
             )
@@ -1097,8 +1157,7 @@ class ParameterManager(object):
         atom_list,\
         force_entity_list = self.build_forcecontainer_list(
             force, 
-            system
-            )
+            system)
         if len(force_entity_list) > 0:
             if self.force_entity_list.size == 0:
                 _force_entity_list = np.array(
