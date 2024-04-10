@@ -672,7 +672,8 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
     if return_results_dict:
         results_all_dict = dict()
     for sys_name in openmm_system_dict:
-        args_dict_list = ray.get(target_dict[sys_name])
+        #args_dict_list = ray.get(target_dict[sys_name])
+        args_dict_list = target_dict[sys_name]
         N_tgt = len(args_dict_list)
         if return_results_dict:
             results_all_dict[sys_name] = list()
@@ -752,7 +753,7 @@ class TargetComputer(object):
                         target_name = target.get_target_name()
                         target_list.append(
                             (target_args, target_name))
-            self._target_dict[sys.name] = ray.put(target_list)
+            self._target_dict[sys.name] = target_list
 
     @property
     def target_dict(self):

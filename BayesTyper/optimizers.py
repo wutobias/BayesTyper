@@ -206,7 +206,7 @@ def get_gradient_scores(
     grad_diff = _EPSILON_GS,
     N_trials = 5,
     N_sys_per_likelihood_batch = 4,
-    local_targets=True,
+    local_targets=False,
     ):
 
     ff_parameter_vector_cp = ff_parameter_vector.copy(
@@ -1589,7 +1589,7 @@ class BaseOptimizer(object):
                     k_values_ij = k_values_ij[split_idxs],
                     grad_diff = self.grad_diff_gs,
                     N_trials = N_trials_gradient,
-                    local_targets=True,
+                    local_targets=False,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     )
                 args = (pvec_id, self.targetcomputer_id, type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, self._N_sys_per_likelihood_batch, mngr_idx, system_idx_list)
@@ -1896,7 +1896,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         k_values_ij = _k_values_ij,
                         grad_diff = _grad_diff,
                         N_trials = _N_trials,
-                        local_targets=True,
+                        local_targets=False,
                         N_sys_per_likelihood_batch = _N_sys_per_likelihood_batch
                         )
                     args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _N_sys_per_likelihood_batch, _mngr_idx, _system_idx_list
@@ -1942,7 +1942,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         mngr_idx_main,
         system_idx_list = list(),
         votes_split_list = list(),
-        local_targets = True,
+        local_targets = False,
         ):
 
         use_scipy = True

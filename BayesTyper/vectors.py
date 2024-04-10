@@ -856,90 +856,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             lazy=lazy
             )
 
-    def cluster_merge(
-        self, 
-        cutoff=None, 
-        n_clusters=None, 
-        ):
-
-        """
-        Cluster parameters and assign parameters according cluster
-        assignment. New types will have parameter values according
-        to cluster centers.
-        cutoff defines the distance cutoff in magnitude normalized
-        parameter space (scaled using `self.scaling_vector`).
-        """
-
-        if cutoff == None and n_clusters == None:
-            raise ValueError(
-                "Must define either `cutoff` or `n_clusters`."
-                )
-        if cutoff != None and n_clusters != None:
-            raise ValueError(
-                "Must define either `cutoff` or `n_clusters`."
-                )
-
-        from sklearn.cluster import AgglomerativeClustering
-
-        value_list = list()
-        for type_i in range(self.force_group_count):
-            value = self.get_parameters_by_force_group(
-                type_i, 
-                get_all_parms=False
-                )
-            ### This is to remove the offset from the
-            ### mapped parameters.
-            for parm_idx in range(self.parameters_per_force_group):
-                value[parm_idx] = value[parm_idx]._value / self.scaling_vector.vector_values[parm_idx]
-            value_list.append(value)
-
-        ### Cluster data
-        clustering  = AgglomerativeClustering(
-            n_clusters=n_clusters,
-            distance_threshold=cutoff).fit(value_list)
-        clusterdata = clustering.labels_
-        cluster_indices = np.unique(clusterdata)
-        N_new_types     = cluster_indices.size
-        ### Stores the allocations for each new type
-        new_allocations = list()
-        ### Stores the value(s) for each new type
-        new_values      = list()
-        ### Find mean values and allocations
-        for cluster_idx in cluster_indices:
-            valids = np.where(clusterdata == cluster_idx)[0]
-            value_list = list()
-            alloc_list = list()
-            for type_i in valids:
-                value = self.get_parameters_by_force_group(
-                    type_i, 
-                    get_all_parms=False
-                    )
-                value_list.append(value)
-                alloc = self.allocations.index([type_i])[0]
-                alloc_list.extend(alloc.tolist())
-
-            new_values.append(np.mean(value_list, axis=0))
-            new_allocations.append(alloc_list)
-
-        ### Assign new allocations and values
-        for type_j in range(N_new_types):
-            alloc_list = new_allocations[type_j]
-            value_list = new_values[type_j]
-            self.allocations[alloc_list] = type_j
-            self.set_parameters_by_force_group(
-                force_group_idx = type_j,
-                values = np.zeros(self.parameters_per_force_group),
-                values_0 = value_list,
-                )
-        ### Make sure all changes are flushed
-        self.apply_changes()
-        
-        ### Remove left-over (empty) parameters
-        for type_j in range(self.force_group_count)[::-1]:
-            if self.is_force_group_empty(type_j):
-                self.remove(type_j)
-
-
     def reset(self, parameters, allocations=None):
 
         import copy
@@ -1024,11 +940,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                 self[vector_idx] = copy.deepcopy(
                     parameters._vector_values[vector_idx]
                     )
-                self.parameter_manager.set_parameter(
-                    force_group_idx,
-                    parameter_name,
-                    self.vector_k[vector_idx]
-                    )
                 vector_idx += 1
 
         self.apply_changes()
@@ -1051,21 +962,35 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         ### First, make sure each force is in the right forcegroup
         for k, z in enumerate(self.allocations):
             self.parameter_manager.relocate_by_rank(
-                k,
-                z,
-                self.exclude_list
-                )
+                k, z, self.exclude_list, update_forces=False)
 
         ### Second, set the parameters
+        batch_mode = self.parameter_manager.N_systems > 50
+        if batch_mode:
+            force_group_idx_list = list()
+            name_list = list()
+            value_list = list()
+
         vector_idx = 0
         for force_group_idx in range(self.force_group_count):
+            if batch_mode:
+                force_group_idx_list.append(force_group_idx)
+                name_list.append([])
+                value_list.append([])
             for parameter_name in self.parameter_name_list:
-                self.parameter_manager.set_parameter(
-                    force_group_idx,
-                    parameter_name,
-                    self.vector_k[vector_idx]
-                    )
+                if batch_mode:
+                    name_list[-1].append(parameter_name)
+                    value_list[-1].append(self.vector_k[vector_idx])
+                else:
+                    self.parameter_manager.set_parameter(
+                            force_group_idx, parameter_name, 
+                            self.vector_k[vector_idx])
                 vector_idx += 1
+        if batch_mode:
+            self.parameter_manager.set_parameter_batch(
+                    force_group_idx_list,
+                    name_list,
+                    value_list)
 
         super().apply_changes()
 
@@ -1195,6 +1120,8 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
 
         assert len(values_0) == N_parms
 
+        name_list = list()
+        value_list = list()
         for parm_idx in range(N_parms):
             v0 = values_0[parm_idx]
             if isinstance(v0, _UNIT_QUANTITY):
@@ -1206,11 +1133,12 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             self._vector_k_vec[vector_idx + parm_idx] = values[parm_idx]
             ### This will update vector_k
             self[vector_idx + parm_idx] = values[parm_idx]
-            self.parameter_manager.set_parameter(
-                force_group_idx,
-                self.parameter_name_list[parm_idx],
-                self.vector_k[vector_idx + parm_idx]
-                )
+            name_list.append(self.parameter_name_list[parm_idx])
+            value_list.append(self.vector_k[vector_idx + parm_idx])
+        self.parameter_manager.set_parameter_batch(
+                [force_group_idx],
+                name_list,
+                value_list)
 
     def get_parameters_by_force_group(
         self, 

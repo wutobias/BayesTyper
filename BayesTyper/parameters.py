@@ -12,6 +12,7 @@ import numpy as np
 import copy
 import openmm
 from openmm import unit
+import ray
 from .constants import _UNIT_QUANTITY
 from .tools import is_type_or_raise
 from .system import System, SystemManager
@@ -35,6 +36,31 @@ from .constants import (_LENGTH,
 # ==============================================================================
 # PRIVATE SUBROUTINES
 # ==============================================================================
+
+
+@ray.remote
+def set_parameter(
+        openmm_system, force_idx, atom_list, force_entity_list,
+        name_list, value_list, force_group_idx_list, forcecontainer_dict):
+    assert len(atom_list) == len(force_entity_list)
+    assert len(atom_list) == len(value_list)
+    assert len(atom_list) == len(name_list)
+    assert len(atom_list) == len(force_group_idx_list)
+
+    N = len(force_group_idx_list)
+    for idx in range(N):
+        force_group_idx = force_group_idx_list[idx]
+        forcecontainer = ray.get(forcecontainer_dict[force_group_idx])
+        force  = openmm_system.getForce(force_idx)
+        for name, value in zip(name_list[idx], value_list[idx]):
+            forcecontainer.set_parameter(
+                name,
+                value,
+                force,
+                force_entity_list[idx],
+                atom_list[idx])
+
+    return openmm_system
 
 
 class ForceTypeContainer(object):
@@ -898,6 +924,72 @@ class ParameterManager(object):
 
         return self.forcecontainer_list[force_group_idx].get_parameter(name)
 
+    def set_parameter_batch(
+            self,
+            force_group_idx_list: list,
+            name_list: list,
+            value_list: list):
+
+        __doc__ = """
+        Use ray parallel processing to update
+        the paraemters in all mm systems.
+        """
+
+        assert len(name_list) == len(value_list)
+        assert len(name_list) == len(force_group_idx_list)
+
+        ### First build list with systems
+        ### we need to change
+        system_idx_dict = dict()
+        forcecontainer_dict = dict()
+        for force_group_idx, _name_list, _value_list in zip(force_group_idx_list, name_list, value_list):
+            forcecontainer_dict[force_group_idx] = ray.put(
+                    self.forcecontainer_list[force_group_idx])
+            idx_list = np.where(
+                self.force_group_idx_list == force_group_idx
+                )[0]
+            for idx in idx_list:
+                sys_idx = self.system_idx_list[idx]
+                if sys_idx in system_idx_dict:
+                    if force_group_idx in system_idx_dict[sys_idx]["force_group_idx_list"]:
+                        _index = system_idx_dict[sys_idx]["force_group_idx_list"].index(force_group_idx)
+                        system_idx_dict[sys_idx]["force_entity_list"][_index].append(
+                                self.force_entity_list[idx])
+                        system_idx_dict[sys_idx]["atom_list"][_index].append(
+                                self.atom_list[idx])
+                    else:
+                        system_idx_dict[sys_idx]["force_group_idx_list"].append(force_group_idx)
+                        system_idx_dict[sys_idx]["force_entity_list"].append(
+                                [self.force_entity_list[idx]])
+                        system_idx_dict[sys_idx]["atom_list"].append(
+                                [self.atom_list[idx]])
+                        system_idx_dict[sys_idx]["name_list"].append(
+                                [name for name in _name_list])
+                        system_idx_dict[sys_idx]["value_list"].append(
+                                [value for value in _value_list])
+                else:
+                    system_idx_dict[sys_idx] = {
+                            "openmm_system"        : self.system_list[sys_idx].openmm_system,
+                            "force_idx"            : self.omm_force_list[sys_idx],
+                            "force_group_idx_list" : [force_group_idx],
+                            "force_entity_list"    : [[self.force_entity_list[idx]]],
+                            "atom_list"            : [[self.atom_list[idx]]],
+                            "name_list"            : [[name for name in _name_list]],
+                            "value_list"           : [[value for value in _value_list]],}
+
+        worker_id_dict = dict()
+        for sys_idx in system_idx_dict:
+            worker_id = set_parameter.remote(
+                    **system_idx_dict[sys_idx],
+                    forcecontainer_dict = forcecontainer_dict)
+            worker_id_dict[sys_idx] = worker_id
+        for sys_idx in system_idx_dict:
+            worker_id = worker_id_dict[sys_idx]
+            openmm_system = ray.get(worker_id)
+            self.system_list[sys_idx].openmm_system = openmm_system
+            self.system_list[sys_idx].openmm_system_xml = openmm.XmlSerializer.serialize(openmm_system)
+            self.system_list[sys_idx].parms_changed = True
+
     def set_parameter(
         self, 
         force_group_idx: int, 
@@ -936,7 +1028,8 @@ class ParameterManager(object):
         self, 
         force_rank: int, 
         force_group_idx: int, 
-        exclude_list: list = list()
+        exclude_list: list = list(),
+        update_forces = True,
         ) -> None:
 
         __doc__ = """
@@ -947,29 +1040,30 @@ class ParameterManager(object):
         idx_list = np.where(
                 self.force_ranks == force_rank
                 )[0]
-        if force_group_idx == _INACTIVE_GROUP_IDX:
-            forcecontainer = self.inactive_forcecontainer
-        else:
-            forcecontainer = self.forcecontainer_list[force_group_idx]
         self.force_group_idx_list[idx_list] = force_group_idx
-        for idx in idx_list:
-            force_entity = self.force_entity_list[idx]
-            system_idx   = self.system_idx_list[idx]
-            system       = self.system_list[system_idx]
-            force_idx    = self.omm_force_list[system_idx]
-            force        = system.openmm_system.getForce(force_idx)
-            atom_list    = self.atom_list[idx]
-            for name in forcecontainer.parm_names:
-                if name in exclude_list:
-                    continue
-                value = forcecontainer.get_parameter(name)
-                forcecontainer.set_parameter(
-                    name, 
-                    value, 
-                    force, 
-                    [force_entity],
-                    [atom_list])
-            system.parms_changed = True
+        if update_forces:
+            if force_group_idx == _INACTIVE_GROUP_IDX:
+                forcecontainer = self.inactive_forcecontainer
+            else:
+                forcecontainer = self.forcecontainer_list[force_group_idx]
+            for idx in idx_list:
+                force_entity = self.force_entity_list[idx]
+                system_idx   = self.system_idx_list[idx]
+                system       = self.system_list[system_idx]
+                force_idx    = self.omm_force_list[system_idx]
+                force        = system.openmm_system.getForce(force_idx)
+                atom_list    = self.atom_list[idx]
+                for name in forcecontainer.parm_names:
+                    if name in exclude_list:
+                        continue
+                    value = forcecontainer.get_parameter(name)
+                    forcecontainer.set_parameter(
+                        name, 
+                        value, 
+                        force, 
+                        [force_entity],
+                        [atom_list])
+                system.parms_changed = True
 
     def are_force_group_same(
         self, 
