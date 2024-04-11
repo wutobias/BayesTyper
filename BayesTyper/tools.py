@@ -528,18 +528,50 @@ def _remove_types(
     set_inactive = False,
     ):
 
+    _CHUNK_SIZE = 20
+
+    @ray.remote
+    def generate_parameter_manager(sys_list, parm_mngr):
+
+        import copy
+        parm_mngr_cp = copy.deepcopy(parm_mngr)
+        for sys in sys_list:
+            parm_mngr_cp.add_system(sys)
+        return parm_mngr_cp
+
     from .vectors import ForceFieldParameterVector
     from .constants import _INACTIVE_GROUP_IDX
 
     if system_list == None:
         system_list = parameter_manager.system_list
     else:
-        for sys in system_list:
-            parameter_manager.add_system(sys)
+        worker_id_list = list()
+        s_list   = tuple()
+        idx_list = tuple()
+        for sys_idx in range(len(system_list)):
+            s_list += (system_list[sys_idx],)
+            idx_list += (sys_idx,)
+            if len(s_list) == _CHUNK_SIZE:
+                worker_id = generate_parameter_manager.remote(
+                    s_list, parameter_manager)
+                worker_id_list.append([worker_id, idx_list])
+                s_list   = tuple()
+                idx_list = tuple()
+        if len(s_list) > 0:
+            worker_id = generate_parameter_manager.remote(
+                    s_list, parameter_manager)
+            worker_id_list.append([worker_id, idx_list])
+        sys_counts = 0
+        for worker_id, idx_list in worker_id_list:
+            _parm_mngr = ray.get(worker_id)
+            parameter_manager.add_parameter_manager(_parm_mngr)
+            for sys_idx in idx_list:
+                system_list[sys_idx] = parameter_manager.system_list[sys_counts]
+                sys_counts += 1
+
     pvec = ForceFieldParameterVector(
         parameter_manager,
-        exclude_others=True
-        )
+        exclude_others=True)
     if pvec.force_group_count > 0:
         if remaining_type_idx == -1:
             remaining_type_idx = pvec.force_group_count - 1
@@ -605,8 +637,7 @@ def remove_types(
                             parameter_manager = ProperTorsionManager(
                                 periodicity,
                                 phase,
-                                exclude_list = ["periodicity", "phase"],
-                            ),
+                                exclude_list = ["periodicity", "phase"]),
                             system_list = system_list,
                             remaining_type_idx = _INACTIVE_GROUP_IDX,
                             set_inactive = True

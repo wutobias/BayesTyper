@@ -685,10 +685,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                 if parameter_name not in self.parameter_name_list:
                     self.exclude_list.append(parameter_name)
 
-        ### Make sure everything is flushed down to the 
-        ### parameter manager.
-        self.apply_changes()
-
     @property
     def parameters_per_force_group(self):
 
@@ -780,27 +776,42 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             )
 
 
+    def __deepcopy__(self, memo):
+
+        from copy import deepcopy
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            if hasattr(self, "_include_systems"):
+                if k == "system_list" and not self._include_systems:
+                    continue
+            setattr(result, k, deepcopy(v, memo))
+        return result
+
+
     def copy(self, include_systems=False, rebuild_to_old_systems=False):
 
         import copy
 
+        self._include_systems = include_systems
+
         self_cp = copy.deepcopy(self)
 
-        if not include_systems:
-            if hasattr(self_cp.parameter_manager, "system_list"):
-                del self_cp.parameter_manager.system_list
+        if rebuild_to_old_systems:
+            self_cp.rebuild_from_systems(
+                lazy = True,
+                system_list = self.parameter_manager.system_list
+                )
         else:
-            if rebuild_to_old_systems:
-                self_cp.rebuild_from_systems(
-                    lazy = True,
-                    system_list = self.parameter_manager.system_list
-                    )
-            else:
-                self_cp.rebuild_from_systems(
-                    lazy = True,
-                    system_list = self_cp.parameter_manager.system_list
-                    )
+            self_cp.rebuild_from_systems(
+                lazy = True,
+                system_list = self_cp.parameter_manager.system_list
+                )
 
+        self._include_systems = True
+       
+                
         return self_cp
 
 
@@ -931,9 +942,7 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                 values = np.zeros(self.parameters_per_force_group),
                 values_0 = value_list,
                 )
-        ### Make sure all changes are flushed
-        self.apply_changes()
-        
+
         ### Remove left-over (empty) parameters
         for type_j in range(self.force_group_count)[::-1]:
             if self.is_force_group_empty(type_j):
@@ -1030,8 +1039,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                     self.vector_k[vector_idx]
                     )
                 vector_idx += 1
-
-        self.apply_changes()
 
     def apply_changes(self):
 
