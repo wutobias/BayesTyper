@@ -669,49 +669,52 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
         }
 
     logP_likelihood  = 0.
-    if return_results_dict:
-        results_all_dict = dict()
-    for sys_name in openmm_system_dict:
+    results_all_dict = dict()
+    for key in openmm_system_dict:
+        sys_name, sys_key = key
         #args_dict_list = ray.get(target_dict[sys_name])
         args_dict_list = target_dict[sys_name]
         N_tgt = len(args_dict_list)
         if return_results_dict:
-            results_all_dict[sys_name] = list()
-        for openmm_system in openmm_system_dict[sys_name]:
-            if return_results_dict:
-                results_dict              = dict()
-                results_dict["rss"]       = dict()
-                results_dict["log_norm_factor"] = dict()
-            for target_idx in range(N_tgt):
-                target_args, target_name = args_dict_list[target_idx]
-                target_method = target_method_dict[target_name]
-                try:
-                    results = target_method(
-                        openmm_system, **target_args, return_results_dict=return_results_dict)
-                    if return_results_dict:
-                        rss, log_norm_factor, results_dict = results
-                        logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
-                        results_dict["rss"][target_idx] = results_dict["rss"]
-                        results_dict["log_norm_factor"][target_idx] = log_norm_factor
-                    else:
-                        rss, log_norm_factor = results
-                        logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
-                except:
-                    if _VERBOSE:
-                        import traceback
-                        print(traceback.format_exc())
-                    logP_likelihood = -np.inf
-                    if return_results_dict:
-                        results_dict["rss"][target_idx] = -np.inf
-                        results_dict["log_norm_factor"][target_idx] = 0.
+            results_all_dict[key] = list()
+        else:
+            results_all_dict[key] = 0.
+        openmm_system = openmm_system_dict[key]
+            
+        if return_results_dict:
+            results_dict              = dict()
+            results_dict["rss"]       = dict()
+            results_dict["log_norm_factor"] = dict()
+        for target_idx in range(N_tgt):
+            target_args, target_name = args_dict_list[target_idx]
+            target_method = target_method_dict[target_name]
+            try:
+                results = target_method(
+                    openmm_system, **target_args, return_results_dict=return_results_dict)
+                if return_results_dict:
+                    rss, log_norm_factor, results_dict = results
+                    logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
+                    results_dict["rss"][target_idx] = results_dict["rss"]
+                    results_dict["log_norm_factor"][target_idx] = log_norm_factor
+                else:
+                    rss, log_norm_factor = results
+                    _logP_likelihood = -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
+                    logP_likelihood += _logP_likelihood
+                    results_all_dict[key] += _logP_likelihood
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                logP_likelihood = -np.inf
+                results_all_dict[key] = -np.inf
+                if return_results_dict:
+                    results_dict["rss"][target_idx] = -np.inf
+                    results_dict["log_norm_factor"][target_idx] = 0.
 
-            if return_results_dict:
-                results_all_dict[sys_name].append(results_dict)
+        if return_results_dict:
+            results_all_dict[key].append(results_dict)
 
-    if return_results_dict:
-        return logP_likelihood, results_all_dict
-    else:
-        return logP_likelihood
+    return logP_likelihood, results_all_dict
 
 target_worker = ray.remote(target_worker_local)
 
@@ -769,13 +772,13 @@ class TargetComputer(object):
         if local:
             result = target_worker_local(
                 openmm_system_dict, 
-                {sys_name : self.target_dict[sys_name] for sys_name in openmm_system_dict},
+                {sys_name : self.target_dict[sys_name] for sys_name,sys_key in openmm_system_dict},
                 return_results_dict)
             return result
         else:
             worker_id = target_worker.remote(
                 openmm_system_dict, 
-                {sys_name : self.target_dict[sys_name] for sys_name in openmm_system_dict},
+                {sys_name : self.target_dict[sys_name] for sys_name,sys_key in openmm_system_dict},
                 return_results_dict)
             return worker_id
 

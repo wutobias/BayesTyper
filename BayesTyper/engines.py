@@ -53,10 +53,17 @@ class OpenmmEngine(object):
         platform_name: str = "CPU",
         platform_properties = {"Threads" : "1"}) -> None:
 
-        if restraints_list:
-            self.openmm_system = copy.deepcopy(openmm_system)
+        if isinstance(openmm_system, openmm.openmm.System):
+            _openmm_system = openmm_system
+        elif isinstance(openmm_system, str):
+            _openmm_system = openmm.XmlSerializer.deserialize(openmm_system)
         else:
-            self.openmm_system = openmm_system
+            raise ValueError("openmm system format not recognized.")
+        
+        if restraints_list:
+            self.openmm_system = copy.deepcopy(_openmm_system)
+        else:
+            self.openmm_system = _openmm_system
 
         self.platform_name       = platform_name
         self.platform_properties = platform_properties

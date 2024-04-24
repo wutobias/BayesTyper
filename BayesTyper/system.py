@@ -48,10 +48,12 @@ class System(object):
         self._top    = top
 
         ### This should created no later than here
-        self.openmm_system = openmm_system
-        self.openmm_system_xml = openmm.XmlSerializer.serialize(
-            self.openmm_system
-            )
+        self.openmm_system      = openmm.XmlSerializer.serialize(openmm_system)
+        self.openmm_system_init = self.openmm_system
+        self._N_atoms           = openmm_system.getNumParticles()
+
+        self._force_dict         = {
+                f.__class__.__name__ : idx for idx, f in enumerate(openmm_system.getForces())}
 
         self.reset_system(
             reset_targets=True,
@@ -66,6 +68,19 @@ class System(object):
         self.masses = np.array(self.masses) * _ATOMIC_MASS
 
         self._N_tgt = 0
+
+    @property
+    def force_dict(self):
+        
+        ### Hack for backwards compatibility
+        if hasattr(self, "_force_dict"):
+            return self._force_dict
+        else:
+            openmm_system = openmm.XmlSerializer.deserialize(
+                    self.openmm_system)
+            self._force_dict         = {
+                    f.__class__.__name__ : idx for idx, f in enumerate(openmm_system.getForces())}
+            return self._force_dict
 
     @property
     def N_tgt(self):
@@ -87,7 +102,7 @@ class System(object):
 
     @property
     def N_atoms(self):
-        return self.openmm_system.getNumParticles()
+        return self._N_atoms
 
     @property
     def name(self):
@@ -124,9 +139,7 @@ class System(object):
 
         from .tools import rdmol_to_nx
 
-        self.openmm_system = openmm.XmlSerializer.deserialize(
-            self.openmm_system_xml
-            )
+        self.openmm_system = self.openmm_system_init
 
         self.rdmol = self.offmol.to_rdkit()
         Chem.SanitizeMol(self.rdmol)

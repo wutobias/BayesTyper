@@ -47,11 +47,18 @@ def set_parameter(
     assert len(atom_list) == len(name_list)
     assert len(atom_list) == len(force_group_idx_list)
 
+    if isinstance(openmm_system, openmm.openmm.System):
+            _openmm_system = openmm_system
+    elif isinstance(openmm_system, str):
+        _openmm_system = openmm.XmlSerializer.deserialize(openmm_system)
+    else:
+        raise ValueError("openmm system format not recognized.")
+
     N = len(force_group_idx_list)
     for idx in range(N):
         force_group_idx = force_group_idx_list[idx]
         forcecontainer = ray.get(forcecontainer_dict[force_group_idx])
-        force  = openmm_system.getForce(force_idx)
+        force  = _openmm_system.getForce(force_idx)
         for name, value in zip(name_list[idx], value_list[idx]):
             forcecontainer.set_parameter(
                 name,
@@ -60,7 +67,7 @@ def set_parameter(
                 force_entity_list[idx],
                 atom_list[idx])
 
-    return openmm_system
+    return openmm.XmlSerializer.serialize(_openmm_system)
 
 
 class ForceTypeContainer(object):
@@ -695,6 +702,7 @@ class ParameterManager(object):
         ### it belongs to.
         ### shape is `(self.force_entity_count,)`
         self.system_idx_list      = np.array([], dtype=int)
+        self.system_name_list     = np.array([], dtype=str)
 
         self._N_systems           = 0
 
@@ -713,11 +721,6 @@ class ParameterManager(object):
         ### This list stores all the OpenMM forces
         ### shape is `(self.N_systems,)`
         self.omm_force_list       = list()
-
-    @property
-    def unique_force_group_idx_list(self):
-
-        return np.unique(self.force_group_idx_list)
 
     @property
     def N_systems(self):
@@ -807,7 +810,7 @@ class ParameterManager(object):
 
         assert system_idx_list_unique.size == self.N_systems
 
-        _system_idx_list = np.copy(self.system_idx_list)
+        _system_idx_list  = np.copy(self.system_idx_list)
         for sys_idx_new in range(self.N_systems):
             sys_idx_old = system_idx_list_unique[sys_idx_new]
             valids = np.where(self.system_idx_list == sys_idx_old)[0]
@@ -825,7 +828,12 @@ class ParameterManager(object):
             valids = np.where(self.force_ranks == rank_old)[0]
             _force_ranks[valids] = rank_new
 
-        self.force_ranks = _force_ranks
+        self.force_ranks  = _force_ranks
+        _system_name_list = np.empty_like(self.force_ranks, dtype=str)
+        for idx, sys_idx in enumerate(self.system_idx_list):
+            sysname = self.system_list[sys_idx].name
+            _system_name_list[idx] = sysname
+        self.system_name_list = _system_name_list
 
     def rebuild_from_systems(
         self,
@@ -857,10 +865,9 @@ class ParameterManager(object):
 
             if lazy:
                 found_force = False
-                for force_idx, force in enumerate(system.openmm_system.getForces()):
-                    if force.__class__.__name__ == self.force_tag:
-                        found_force = True
-                        break
+                if self.force_tag in system.force_dict:
+                    found_force = True
+                    force_idx   = system.force_dict[self.force_tag]
 
                 ### If, for whatever reason, the force tag is not part of the
                 ### system object, we cannot procede here.
@@ -928,7 +935,8 @@ class ParameterManager(object):
             self,
             force_group_idx_list: list,
             name_list: list,
-            value_list: list):
+            value_list: list,
+            only_return_system: bool = False):
 
         __doc__ = """
         Use ray parallel processing to update
@@ -982,19 +990,28 @@ class ParameterManager(object):
             worker_id = set_parameter.remote(
                     **system_idx_dict[sys_idx],
                     forcecontainer_dict = forcecontainer_dict)
-            worker_id_dict[sys_idx] = worker_id
-        for sys_idx in system_idx_dict:
-            worker_id = worker_id_dict[sys_idx]
+            worker_id_dict[worker_id] = sys_idx
+        worker_id_list = list(worker_id_dict.keys())
+        if only_return_system:
+            system_dict = dict()
+        while worker_id_list:
+            [worker_id], worker_id_list = ray.wait(worker_id_list)
+            sys_idx = worker_id_dict[worker_id]
             openmm_system = ray.get(worker_id)
-            self.system_list[sys_idx].openmm_system = openmm_system
-            self.system_list[sys_idx].openmm_system_xml = openmm.XmlSerializer.serialize(openmm_system)
-            self.system_list[sys_idx].parms_changed = True
+            if only_return_system:
+                system_dict[sys_idx] = openmm_system
+            else:
+                self.system_list[sys_idx].openmm_system = openmm_system
+                self.system_list[sys_idx].parms_changed = True
+        if only_return_system:
+            return system_dict
 
     def set_parameter(
         self, 
         force_group_idx: int, 
         name: str, 
-        value: _UNIT_QUANTITY):
+        value: _UNIT_QUANTITY,
+        only_return_system: bool = False):
 
         __doc__ = """
         Set the parameter of name `name` of force group `force_group_idx`
@@ -1008,13 +1025,17 @@ class ParameterManager(object):
             forcecontainer = self.inactive_forcecontainer
         else:
             forcecontainer = self.forcecontainer_list[force_group_idx]
-        force_entity_list = list()
+        openmm_system_dict = dict()
         for idx in idx_list:
             force_entity = self.force_entity_list[idx]
             system_idx   = self.system_idx_list[idx]
-            system       = self.system_list[system_idx]
+            if system_idx in openmm_system_dict:
+                openmm_system = openmm_system_dict[system_idx]
+            else:
+                openmm_system = openmm.XmlSerializer.deserialize(
+                        self.system_list[system_idx].openmm_system)
             force_idx    = self.omm_force_list[system_idx]
-            force        = system.openmm_system.getForce(force_idx)
+            force        = openmm_system.getForce(force_idx)
             atom_list    = self.atom_list[idx]
             forcecontainer.set_parameter(
                 name, 
@@ -1022,7 +1043,19 @@ class ParameterManager(object):
                 force, 
                 [force_entity],
                 [atom_list])
-            system.parms_changed = True
+            openmm_system_dict[system_idx] = openmm_system
+        if only_return_system:
+            system_dict = dict()
+        for system_idx in openmm_system_dict:
+            openmm_system = openmm.XmlSerializer.serialize(
+                    openmm_system_dict[system_idx])
+            if only_return_system:
+                system_dict[system_idx] = openmm_system
+            else:
+                self.system_list[system_idx].openmm_system = openmm_system
+                self.system_list[system_idx].parms_changed = True
+        if only_return_system:
+            return system_dict
 
     def relocate_by_rank(
         self, 
@@ -1046,12 +1079,17 @@ class ParameterManager(object):
                 forcecontainer = self.inactive_forcecontainer
             else:
                 forcecontainer = self.forcecontainer_list[force_group_idx]
+            openmm_system_dict = dict()
             for idx in idx_list:
                 force_entity = self.force_entity_list[idx]
                 system_idx   = self.system_idx_list[idx]
-                system       = self.system_list[system_idx]
+                if system_idx in openmm_system_dict:
+                    openmm_system = openmm_system_dict[system_idx]
+                else:
+                    openmm_system = openmm.XmlSerializer.deserialize(
+                            self.system_list[system_idx].openmm_system)
                 force_idx    = self.omm_force_list[system_idx]
-                force        = system.openmm_system.getForce(force_idx)
+                force        = openmm_system.getForce(force_idx)
                 atom_list    = self.atom_list[idx]
                 for name in forcecontainer.parm_names:
                     if name in exclude_list:
@@ -1063,7 +1101,12 @@ class ParameterManager(object):
                         force, 
                         [force_entity],
                         [atom_list])
-                system.parms_changed = True
+                openmm_system_dict[system_idx] = openmm_system
+
+            for system_idx in openmm_system_dict:
+                self.system_list[system_idx].openmm_system = openmm.XmlSerializer.serialize(
+                        openmm_system_dict[system_idx])
+                self.system_list[system_idx].parms_changed = True
 
     def are_force_group_same(
         self, 
@@ -1224,10 +1267,9 @@ class ParameterManager(object):
         import copy
 
         found_force = False
-        for force_idx, force in enumerate(system.openmm_system.getForces()):
-            if force.__class__.__name__ == self.force_tag:
-                found_force = True
-                break
+        if self.force_tag in system.force_dict:
+            found_force = True
+            force_idx   = system.force_dict[self.force_tag]
 
         ### If, for whatever reason, the force tag is not part of the
         ### system object, we cannot procede here.
@@ -1235,6 +1277,9 @@ class ParameterManager(object):
             raise Exception(
                 f"Could not find force {self.force_tag} in system {system.name}.")
 
+        openmm_system = openmm.XmlSerializer.deserialize(
+                system.openmm_system)
+        force = openmm_system.getForce(force_idx)
         self.omm_force_list.append(force_idx)
         self.system_list.append(system)
         self.rdmol_list.append(
@@ -1266,17 +1311,16 @@ class ParameterManager(object):
 
         ### Now add them into forcegroups
         N_force_entites = len(forcecontainer_list)
-        force_ranks     = list()
+        force_ranks     = np.zeros(N_force_entites, dtype=int)
+        force_ranks[:]  = -1
+        _force_group_idx_new_list = np.zeros(N_force_entites, dtype=int)
         for force_entity in range(N_force_entites):
             force_group_idx_new = None
 
             forcecontainer_new = forcecontainer_list[force_entity]
             found_forcecontainer_match = False
             if forcecontainer_new.is_active:
-                for force_group_idx in self.unique_force_group_idx_list:
-                    if force_group_idx == _INACTIVE_GROUP_IDX:
-                        continue
-                    forcecontainer_old = self.forcecontainer_list[force_group_idx]
+                for force_group_idx, forcecontainer_old in enumerate(self.forcecontainer_list):
                     if forcecontainer_new == forcecontainer_old:
                         force_group_idx_new = force_group_idx
                         found_forcecontainer_match = True
@@ -1289,19 +1333,17 @@ class ParameterManager(object):
             else:
                 force_group_idx_new = _INACTIVE_GROUP_IDX
 
-            force_ranks.append(-1)
+            _force_group_idx_new_list[force_entity] = force_group_idx_new
 
-            ### We *must* update `self.force_group_idx_list` at the end of each
-            ### iteration in order to update `self.unique_force_group_idx_list`.
-            _force_group_idx_list = np.append(
-                self.force_group_idx_list,
-                force_group_idx_new).astype(int)
-            self.force_group_idx_list = _force_group_idx_list
+        _force_group_idx_list = np.concatenate(
+            (self.force_group_idx_list, _force_group_idx_new_list), dtype=int)
+        self.force_group_idx_list = _force_group_idx_list
 
-            _system_idx_list = np.append(
-                self.system_idx_list,
-                self._N_systems).astype(int)
-            self.system_idx_list = _system_idx_list
+        _add    = np.zeros(N_force_entites, dtype=int)
+        _add[:] = self._N_systems
+        _system_idx_list = np.concatenate(
+            (self.system_idx_list, _add), dtype=int)
+        self.system_idx_list = _system_idx_list
 
         ### Here we make sure that forces that are related through symmetry
         ### are grouped together in the self.force_ranks list.
@@ -1326,10 +1368,8 @@ class ParameterManager(object):
                 if found_forcecontainer_match:
                     force_ranks[force_entity_2] = next_rank
 
-        force_ranks  = np.array(force_ranks, dtype=int)
-        _force_ranks = np.append(
-            self.force_ranks, 
-            force_ranks).astype(int)
+        _force_ranks = np.concatenate(
+            (self.force_ranks, force_ranks), dtype=int)
         self.force_ranks = _force_ranks
         ### Check that all force ranks have been matched.
         assert np.all(self.force_ranks > -1)
@@ -1343,9 +1383,21 @@ class ParameterManager(object):
 
         self.atom_list.extend(atom_list)
 
+        ### Since we might change the system in here,
+        ### we must update the xml in the system object
+        system.openmm_system = openmm.XmlSerializer.serialize(
+                openmm_system)
+
         ### In the last step increase the number of systems
         ### and add the system
         self._N_systems += 1
+
+        ### Finally make sure we have all the correct system names
+        _system_name_list = np.empty_like(self.force_ranks, dtype=str)
+        for idx, sys_idx in enumerate(self.system_idx_list):
+            sysname = self.system_list[sys_idx].name
+            _system_name_list[idx] = sysname
+        self.system_name_list = _system_name_list
 
         return True
 

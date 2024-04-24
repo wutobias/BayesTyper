@@ -46,13 +46,14 @@ def _test_logL(
 
     import time
 
+    _pvec_cp = _pvec.copy(include_systems=True, rebuild_to_old_systems=False)
+    
     start_time = time.time()
 
-    logL_list = batch_likelihood_typing(
-        _pvec,
+    _ = batch_likelihood_typing(
+        _pvec_cp,
         _targetcomputer,
-        [_pvec.allocations[:].tolist()],
-        rebuild_from_systems=True
+        [_pvec_cp.allocations[:].tolist()]*10,
         )
 
     time_delta = time.time() - start_time
@@ -63,29 +64,22 @@ def batch_likelihood_typing(
     pvec,
     targetcomputer,
     typing_list,
-    rebuild_from_systems=True
     ):
 
     import copy
     import numpy as np
 
-    if rebuild_from_systems:
-        pvec_cp = pvec.copy(include_systems=True, rebuild_to_old_systems=False)
-    else:
-        pvec_cp = pvec
-
     N_queries = len(typing_list)
 
-    openmm_system_list = list()
-    for sys in pvec_cp.parameter_manager.system_list:
-        openmm_system_list.append(
-            {sys.name : [sys.openmm_system]}
-            )
-
-    init_alloc = copy.deepcopy(pvec_cp.allocations[:])
+    init_alloc = pvec.allocations[:]
     worker_id_dict = dict()
     cache_dict = dict()
     cached_idxs = list()
+    pvec_list = [pvec]
+    logL = LikelihoodVectorized(
+            pvec_list, targetcomputer, three_point=False, N_sys_per_batch=8)
+    x0   = logL.pvec[:]
+    logL_list = np.zeros(N_queries, dtype=float)
     for idx in range(N_queries):
         typing = list(typing_list[idx])
         typing_tuple = tuple(typing)
@@ -93,62 +87,16 @@ def batch_likelihood_typing(
             cached_idxs.append(idx)
         else:
             cache_dict[typing_tuple] = idx
-            pvec_cp.allocations[:] = typing[:]
-            pvec_cp.apply_changes()
-            for ommdict_idx, ommdict in enumerate(openmm_system_list):
-                worker_id = targetcomputer(
-                    copy.deepcopy(ommdict), 
-                    False
-                    )
-                worker_id_dict[worker_id] = (idx, ommdict_idx)
+            pvec_list[0].allocations[:] = typing[:]
+            pvec_list[0].apply_changes()
+            logL._initialize_systems()
+            logL_list[idx] = logL(x0)
     
-    logL_list = np.zeros(N_queries, dtype=float)
-    worker_id_list = list(worker_id_dict.keys())
-    while worker_id_list:
-        worker_id, worker_id_list = ray.wait(
-            worker_id_list, timeout=_TIMEOUT)
-        failed = len(worker_id) == 0
-        if not failed:
-            try:
-                _logP_likelihood = ray.get(
-                    worker_id[0],
-                    timeout=_TIMEOUT)
-            except:
-                failed = True
-            if not failed:
-                idx, ommdict_idx = worker_id_dict[worker_id[0]]
-                logL_list[idx]  += _logP_likelihood
-                del worker_id_dict[worker_id[0]]
-        if failed:
-            if len(worker_id) > 0:
-                if worker_id[0] not in worker_id_list:
-                    worker_id_list.append(worker_id[0])
-            resubmit_list = retrieve_failed_workers(worker_id_list)
-            for worker_id in resubmit_list:
-                ray.cancel(worker_id, force=True)
-                idx, ommdict_idx = worker_id_dict[worker_id]
-                del worker_id_dict[worker_id]
-                typing = list(typing_list[idx])
-                typing_tuple = tuple(typing)
-                pvec_cp.allocations[:] = typing[:]
-                pvec_cp.apply_changes()
-                ommdict = openmm_system_list[ommdict_idx]
-                worker_id = targetcomputer(
-                    copy.deepcopy(ommdict), 
-                    False
-                    )
-                worker_id_dict[worker_id] = (idx, ommdict_idx)
-            worker_id_list = list(worker_id_dict.keys())
-
     for idx in cached_idxs:
         typing = list(typing_list[idx])
         typing_tuple = tuple(typing)
         idx_cache = cache_dict[typing_tuple]
         logL_list[idx] = logL_list[idx_cache]
-
-    if not rebuild_from_systems:
-        pvec_cp.allocations[:] = init_alloc
-        pvec_cp.apply_changes()
 
     return logL_list
 
@@ -639,7 +587,6 @@ def set_parameters_remote(
             _pvec_list[_mngr_idx],
             targetcomputer,
             _typing_list,
-            rebuild_from_systems=False
             )
         N_parms_all = 0.
         for pvec in _pvec_list:
@@ -1135,7 +1082,8 @@ class BaseOptimizer(object):
                     self.best_pvec_list[mngr_idx],
                     pvec.allocations
                     )
-                pvec.apply_changes()
+                ### No need to call pvec.apply_changes()
+                ### here. pvec.reset already does that.
 
             if as_copy:
                 pvec_list.append(
@@ -1167,11 +1115,11 @@ class BaseOptimizer(object):
             sys_dict = dict()
             if isinstance(sys_idx, int):
                 sys = self.system_list[sys_idx]
-                sys_dict[sys.name] = [sys.openmm_system]
+                sys_dict[sys.name, sys_idx] = sys.openmm_system
             else:
                 for _sys_idx in sys_idx:
                     sys = self.system_list[_sys_idx]
-                    sys_dict[sys.name] = [sys.openmm_system]
+                    sys_dict[sys.name, _sys_idx] = sys.openmm_system
 
             worker_id = self.targetcomputer(
                 sys_dict,
@@ -1190,7 +1138,7 @@ class BaseOptimizer(object):
             failed = len(worker_id) == 0
             if not failed:
                 try:
-                    _logP_likelihood = ray.get(
+                    _logP_likelihood, _ = ray.get(
                         worker_id[0], timeout=_TIMEOUT)
                 except:
                     failed = True
@@ -1212,11 +1160,11 @@ class BaseOptimizer(object):
                     del worker_id_dict[worker_id]
                     if isinstance(sys_idx, int):
                         sys = self.system_list[sys_idx]
-                        sys_dict[sys.name] = [sys.openmm_system]
+                        sys_dict[sys.name, sys_idx] = sys.openmm_system
                     else:
                         for _sys_idx in sys_idx:
                             sys = self.system_list[_sys_idx]
-                            sys_dict[sys.name] = [sys.openmm_system]
+                            sys_dict[sys.name, sys_idx] = sys.openmm_system
                     worker_id = self.targetcomputer(
                         sys_dict,
                         False
@@ -2242,13 +2190,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 sys_idx_pair = minimize_initial_worker_id_dict[worker_id[0]]
                                 del minimize_initial_worker_id_dict[worker_id[0]]
                                 for mngr_idx in range(self.N_mngr):
-                                    split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(                                                                   
-                                        mngr_idx,                                                                                                                         
-                                        self.best_bitvec_type_list[mngr_idx],                                                                                             
-                                        sys_idx_pair,                                                                                                                     
-                                        pvec_start=pvec_list_cp[mngr_idx],                                                                                                
-                                        N_trials_gradient=N_trials_gradient,
-                                        split_all=True)
+                                    split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(
+                                            mngr_idx,
+                                            self.best_bitvec_type_list[mngr_idx],
+                                            sys_idx_pair,
+                                            pvec_start=pvec_list_cp[mngr_idx],
+                                            N_trials_gradient=N_trials_gradient,
+                                            split_all=True)
                             except:
                                 failed = True
                         if failed:

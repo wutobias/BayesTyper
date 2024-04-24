@@ -24,6 +24,19 @@ from .ray_tools import retrieve_failed_workers
 # PRIVATE SUBROUTINES
 # ==============================================================================
 
+@ray.remote
+def apply_grad(pvec, j, only_apply_to_systems, grad_diff):
+    pvec     = pvec.copy(include_systems=True)
+    pvec[j] += grad_diff
+    pvec.apply_changes(
+	only_apply_to_systems)
+    system_dict = dict()
+    for sys_idx in only_apply_to_systems:
+        sys = pvec.parameter_manager.system_list[sys_idx]
+        system_dict[sys.name,sys_idx] = sys.openmm_system
+    del pvec
+    return system_dict
+
 
 class LikelihoodVectorized(object):
 
@@ -49,116 +62,48 @@ class LikelihoodVectorized(object):
     def _initialize_systems(self):
 
         self.N_parms   = 0
-        self.pvec_idxs = list()
         self.jacobian  = list()
 
-        start = 0
-        stop  = 0
-        self.pvec_list_fwd = list()
-        self.openmm_system_fwd_dict = dict()
-        if self._three_point:
-            self.openmm_system_bkw_dict = dict()
-            self.pvec_list_bkw = list()
-        self.openmm_system_dict = dict()
-        self.parm_idx_sysname_dict = dict()
-        self.sysname_parm_idx_dict = dict()
+        parm_idx_sysname_dict = dict()
+        sysidx_parm_idx_dict  = dict()
+        parm_idx_map_dict     = dict()
+
         parm_idx = 0
         for i in range(self._N_pvec):
-            pvec    = self.pvec_list[i]
-            for sys in pvec.parameter_manager.system_list:
-                if not sys.name in self.openmm_system_dict:
-                    self.openmm_system_dict[sys.name] = [sys.openmm_system]
-                else:
-                    if self.openmm_system_dict[sys.name][0] != sys.openmm_system:
-                        raise ValueError(
-                            f"Parameter vectors for systems {sys.name} are not connected to same system object."
-                            )
-
-            remove_sys_idx_dict = dict()
-            all_systems_set = set(pvec.parameter_manager.system_idx_list)
-            _parm_idx = 0
+            pvec = self.pvec_list[i]
+            self.jacobian.extend(
+                pvec.jacobian.tolist())
             for f in range(pvec.force_group_count):
                 ranks = pvec.allocations.index([f])[0]
-                valid_system_list = list()
                 for r in ranks:
                     valids = np.where(
-                        pvec.parameter_manager.force_ranks == r
-                    )
-                    valid_system_list.extend(
-                        pvec.parameter_manager.system_idx_list[valids].tolist()
-                    )
-                to_be_deleted = all_systems_set.difference(set(valid_system_list))
-                for _ in range(pvec.parameters_per_force_group):
-                    remove_sys_idx_dict[_parm_idx] = list(to_be_deleted)[::-1]
-                    _parm_idx += 1
-
-            start   = stop
-            stop    = start+pvec.size
-            self.pvec_idxs.append([start, stop])            
-            self.N_parms += pvec.size
-            self.jacobian.extend(
-                pvec.jacobian.tolist()
-                )
-
-            self.pvec_list_fwd.append(list())
-            if self._three_point:
-                self.pvec_list_bkw.append(list())
-            for _parm_idx in range(pvec.size):
-                pvec_cp_fwd = pvec.copy(
-                    include_systems=True, 
-                    rebuild_to_old_systems=False
-                    )
-                pvec_cp_fwd.remove_system(
-                    remove_sys_idx_dict[_parm_idx]
-                    )
-
-                self.pvec_list_fwd[-1].append(pvec_cp_fwd)
-                self.openmm_system_fwd_dict[parm_idx] = list()
-                if self._three_point:
-                    pvec_cp_bkw = pvec_cp_fwd.copy(
-                        include_systems=True, 
-                        rebuild_to_old_systems=False
-                        )
-                    ### Note we don't have to remove systems
-                    ### since we are copying from `pvec_cp_fwd`
-                    self.pvec_list_bkw[-1].append(pvec_cp_bkw)
-                    self.openmm_system_bkw_dict[parm_idx] = list()
-
-                N_sys = len(pvec_cp_fwd.parameter_manager.system_list)
-                fwd_dict  = dict()
-                bkw_dict  = dict()
-                for sys_idx in range(N_sys):
-                    sys_fwd = pvec_cp_fwd.parameter_manager.system_list[sys_idx]
-                    fwd_dict[sys_fwd.name] = [sys_fwd.openmm_system]
-                    if self._three_point:
-                        sys_bkw = pvec_cp_bkw.parameter_manager.system_list[sys_idx]
-                        assert sys_bkw.name == sys_fwd.name
-                        bkw_dict[sys_bkw.name] = [sys_bkw.openmm_system]
-
-                    if len(fwd_dict) == self._N_sys_per_batch:
-                        self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
-                        fwd_dict = dict()
-                        if self._three_point:
-                            self.openmm_system_bkw_dict[parm_idx].append(bkw_dict)
-                            bkw_dict = dict()
-
-                    if sys_fwd.name in self.parm_idx_sysname_dict:
-                        self.parm_idx_sysname_dict[sys_fwd.name].append(parm_idx)
-                    else:
-                        self.parm_idx_sysname_dict[sys_fwd.name] = [parm_idx]
-
-                    if parm_idx in self.sysname_parm_idx_dict:
-                        self.sysname_parm_idx_dict[parm_idx].append(sys_fwd.name)
-                    else:
-                        self.sysname_parm_idx_dict[parm_idx] = [sys_fwd.name]
-
-                if len(fwd_dict) > 0:
-                    self.openmm_system_fwd_dict[parm_idx].append(fwd_dict)
-                    if self._three_point:
-                        self.openmm_system_bkw_dict[parm_idx].append(bkw_dict)
-
-                parm_idx += 1
-
+                        pvec.parameter_manager.force_ranks == r)
+                    system_idx_list = np.unique(
+                        pvec.parameter_manager.system_idx_list[valids])
+                    for p_idx in range(pvec.parameters_per_force_group):
+                        _p_idx = f*pvec.parameters_per_force_group+p_idx
+                        _parm_idx = parm_idx + p_idx
+                        for sys_idx in system_idx_list:
+                            if sys_idx in parm_idx_sysname_dict:
+                                if _parm_idx not in parm_idx_sysname_dict[sys_idx]:
+                                    parm_idx_sysname_dict[sys_idx].append(_parm_idx)
+                            else:
+                                parm_idx_sysname_dict[sys_idx] = [_parm_idx]
+                            if _parm_idx in sysidx_parm_idx_dict:
+                                if sys_idx not in sysidx_parm_idx_dict[_parm_idx]:
+                                    sysidx_parm_idx_dict[_parm_idx].append(sys_idx)
+                            else:
+                                sysidx_parm_idx_dict[_parm_idx] = [sys_idx]
+                        parm_idx_map_dict[_parm_idx] = (i,_p_idx)
+                self.N_parms += pvec.parameters_per_force_group
+                parm_idx     += pvec.parameters_per_force_group
+        self.parm_idx_map_dict     = parm_idx_map_dict
+        self.sysidx_parm_idx_dict  = dict()
+        self.parm_idx_sysname_dict = dict()
+        for parm_idx in sysidx_parm_idx_dict:
+            self.sysidx_parm_idx_dict[parm_idx] = set(sysidx_parm_idx_dict[parm_idx])
+        for sys_idx in parm_idx_sysname_dict:
+            self.parm_idx_sysname_dict[sys_idx] = set(parm_idx_sysname_dict[sys_idx])
         self.jacobian = np.array(self.jacobian)
 
     @property
@@ -167,14 +112,14 @@ class LikelihoodVectorized(object):
         pvec_list = list()
         for i in range(self._N_pvec):
             pvec_list.extend(
-            self.pvec_list[i].copy()[:].tolist()
+                self.pvec_list[i][:].tolist()
             )
         return np.array(pvec_list)
 
     def apply_changes(
         self, 
         vec, 
-        grad=True, 
+        grad=False, 
         parm_idx_list=None,
         grad_diff=_EPSILON):
 
@@ -186,25 +131,72 @@ class LikelihoodVectorized(object):
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
-        counts = 0
+        only_apply_to_systems = set()
+        for parm_idx in parm_idx_list:
+            i,j  = self.parm_idx_map_dict[parm_idx]
+            pvec = self.pvec_list[i]
+            pvec[j] = vec[parm_idx]
+            only_apply_to_systems.update(
+                    self.sysidx_parm_idx_dict[parm_idx])
         for i in range(self._N_pvec):
-            pvec       = self.pvec_list[i]
-            start_stop = self.pvec_idxs[i]
-            pvec[:]    = vec[start_stop[0]:start_stop[1]]
-            pvec.apply_changes()
-            if grad:
-                for j in range(pvec.size):
-                    if j in parm_idx_list:
-                        pvec_fwd = self.pvec_list_fwd[i][j]
-                        pvec_fwd[:] = vec[start_stop[0]:start_stop[1]]
-                        pvec_fwd[j] += grad_diff
-                        pvec_fwd.apply_changes()
-                        if self._three_point:
-                            pvec_bkw = self.pvec_list_bkw[i][j]
-                            pvec_bkw[:] = vec[start_stop[0]:start_stop[1]]
-                            pvec_bkw[j] -= grad_diff
-                            pvec_bkw.apply_changes()
-                    counts += 1
+            pvec = self.pvec_list[i]
+            pvec.apply_changes(
+                only_apply_to_systems=only_apply_to_systems)
+
+        system_dict = dict()
+        if not grad or (grad and not self._three_point):
+            for i in range(self._N_pvec):
+                pvec = self.pvec_list[i]
+                for sys_idx in only_apply_to_systems:
+                    sys = pvec.parameter_manager.system_list[sys_idx]
+                    system_dict[sys.name,(sys_idx,1.,-1)] = sys.openmm_system
+
+        if grad:
+            pvec_list = [ray.put(pvec) for pvec in self.pvec_list]
+            worker_id_dict = dict()
+            for parm_idx in parm_idx_list:
+                i,j  = self.parm_idx_map_dict[parm_idx]
+                _only_apply_to_systems = self.sysidx_parm_idx_dict[parm_idx]
+                worker_id = apply_grad.remote(
+                        pvec_list[i], j, _only_apply_to_systems, grad_diff)
+                worker_id_dict[worker_id] = 1., parm_idx 
+                if self._three_point:
+                    worker_id = apply_grad.remote(
+                            pvec_list[i], j, _only_apply_to_systems, -grad_diff)
+                    worker_id_dict[worker_id] = -1., parm_idx
+
+            worker_id_list = list(worker_id_dict.keys())
+            while worker_id_list:
+                [worker_id], worker_id_list = ray.wait(worker_id_list)
+                _system_dict = ray.get(worker_id)
+                sign, parm_idx = worker_id_dict[worker_id]
+                for _key in _system_dict:
+                    sys_name, sys_idx = _key
+                    key = sys_name, (sys_idx, sign, parm_idx)
+                    system_dict[key] = _system_dict[_key]
+
+                #pvec = self.pvec_list[i]
+                #pvec[j] += grad_diff
+                #pvec.apply_changes(
+                #    only_apply_to_systems=_only_apply_to_systems)
+                #for sys_idx in _only_apply_to_systems:
+                #    sys = pvec.parameter_manager.system_list[sys_idx]
+                #    system_dict[sys.name,(sys_idx,1.,parm_idx)] = sys.openmm_system
+                #if self._three_point:
+                #    pvec[j] -= 2.*grad_diff
+                #    pvec.apply_changes(
+                #        only_apply_to_systems=_only_apply_to_systems)
+                #    for sys_idx in _only_apply_to_systems:
+                #        sys = pvec.parameter_manager.system_list[sys_idx]
+                #        system_dict[sys.name,(sys_idx,-1.,parm_idx)] = sys.openmm_system
+                #    pvec[j] += grad_diff
+                #else:
+                #    pvec[j] -= grad_diff
+                #pvec.apply_changes(
+                #        only_apply_to_systems=_only_apply_to_systems)
+
+        return system_dict
+
 
     def _results_dict_to_likelihood(self, results_dict_all):
 
@@ -220,26 +212,14 @@ class LikelihoodVectorized(object):
 
     def _call_local(self, vec, parm_idx_list):
 
-        self.apply_changes(
-            vec, grad=False,
-            parm_idx_list=parm_idx_list)
-
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
-        logP_likelihood  = 0.
-        sysname_run_list = list()
-        for sysname in self.openmm_system_dict:
-            if sysname in sysname_run_list:
-                continue
-            _parm_idx_list = self.parm_idx_sysname_dict[sysname]
-            for parm_idx in parm_idx_list:
-                if parm_idx in _parm_idx_list:
-                    _logP_likelihood = self.targetcomputer.__call__(
-                        {sysname:self.openmm_system_dict[sysname]}, False, True)
-                    logP_likelihood += _logP_likelihood
-                    sysname_run_list.append(sysname)
-                    break
+        system_dict = self.apply_changes(
+            vec, grad=False, 
+            parm_idx_list=parm_idx_list) 
+        logP_likelihood, _ = self.targetcomputer(system_dict, False, True)
+
         return logP_likelihood
 
     def __call__(
@@ -251,28 +231,26 @@ class LikelihoodVectorized(object):
         if local:
             return self._call_local(vec, parm_idx_list)
 
-        self.apply_changes(
-            vec, grad=False,
-            parm_idx_list=parm_idx_list)
-
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
-        sysname_run_list = list()
+        system_dict = self.apply_changes(
+            vec, grad=False, 
+            parm_idx_list=parm_idx_list)
         worker_id_dict = dict()
-        for sysname in self.openmm_system_dict:
-            if sysname in sysname_run_list:
-                continue
-            _parm_idx_list = self.parm_idx_sysname_dict[sysname]
-            for parm_idx in parm_idx_list:
-                if parm_idx in _parm_idx_list:
-                    worker_id = self.targetcomputer.__call__(
-                        {sysname:self.openmm_system_dict[sysname]}, False)
-                    worker_id_dict[worker_id] = sysname
-                    sysname_run_list.append(sysname)
-                    break
-            
-        worker_id_list = list(worker_id_dict.keys())
+        system_batch_dict = dict()
+        for key in system_dict:
+            system_batch_dict[key] = system_dict[key]
+            if len(system_batch_dict) == self._N_sys_per_batch:
+                worker_id = self.targetcomputer(system_batch_dict, False, False)
+                worker_id_dict[worker_id] = list(system_batch_dict.keys())
+                system_batch_dict = dict()
+        if len(system_batch_dict) > 0:
+            worker_id = self.targetcomputer(system_batch_dict, False, False)
+            worker_id_dict[worker_id] = list(system_batch_dict.keys())
+            system_batch_dict = dict()
+
+        worker_id_list  = list(worker_id_dict.keys())
         logP_likelihood = 0.
         while worker_id_list:
             worker_id, worker_id_list = ray.wait(
@@ -280,7 +258,7 @@ class LikelihoodVectorized(object):
             failed = len(worker_id) == 0
             if not failed:
                 try:
-                    _logP_likelihood = ray.get(
+                    _logP_likelihood, _ = ray.get(
                         worker_id[0], timeout=_TIMEOUT)
                 except:
                     failed = True
@@ -294,11 +272,11 @@ class LikelihoodVectorized(object):
                 resubmit_list = retrieve_failed_workers(worker_id_list)
                 for worker_id in resubmit_list:
                     ray.cancel(worker_id, force=True)
-                    key = worker_id_dict[worker_id]
+                    key_list = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
-                    value = self.openmm_system_dict[key]
-                    worker_id = self.targetcomputer.__call__({key:value}, False)
-                    worker_id_dict[worker_id] = key
+                    worker_id = self.targetcomputer(
+                        {key:system_dict[key] for key in key_list}, False, False)
+                    worker_id_dict[worker_id] = key_list
                 worker_id_list = list(worker_id_dict.keys())
 
         return logP_likelihood
@@ -314,38 +292,26 @@ class LikelihoodVectorized(object):
 
         import numpy as np
 
-        if not self._three_point:
-            grad_diff *= 2.
-
-        self.apply_changes(
-            vec, grad=True, 
-            parm_idx_list=parm_idx_list, 
-            grad_diff=grad_diff)
-
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
-        grad = np.zeros(self.N_parms, dtype=float)
-        for parm_idx in self.openmm_system_fwd_dict:
-            if not parm_idx in parm_idx_list:
-                continue
-            for sys_idx, openmm_system_dict in enumerate(self.openmm_system_fwd_dict[parm_idx]):
-                _logP_likelihood = self.targetcomputer.__call__(openmm_system_dict, False, True)
-                grad[parm_idx] += _logP_likelihood
+        system_dict = self.apply_changes(
+            vec, grad=True, 
+            parm_idx_list=parm_idx_list, 
+            grad_diff=grad_diff)
+        _, results_dict = self.targetcomputer(system_dict, False, True)
 
+        grad = np.zeros(self.N_parms, dtype=float)
+        for key in results_dict:
+            sys_name, (sys_idx, sign, parm_idx) = key
             if self._three_point:
-                for sys_idx, openmm_system_dict in enumerate(self.openmm_system_bkw_dict[parm_idx]):
-                    _logP_likelihood = self.targetcomputer.__call__(openmm_system_dict, False, True)
-                    grad[parm_idx] -= _logP_likelihood
-        if not self._three_point:
-            for sysname in self.openmm_system_dict:
-                _parm_idx_list = self.parm_idx_sysname_dict[sysname]
-                if len(_parm_idx_list) > 0 and len(parm_idx_list) > 0:
-                    _logP_likelihood = self.targetcomputer.__call__(
-                        {sysname:self.openmm_system_dict[sysname]}, False, True)
-                    for parm_idx in parm_idx_list:
-                        if parm_idx in _parm_idx_list:
-                            grad[parm_idx] -= _logP_likelihood
+                grad[parm_idx] += results_dict[key] * sign
+            else:
+                if parm_idx == -1:
+                    _parm_idx = self.parm_idx_sysname_dict[sys_idx]
+                    grad[list(_parm_idx)] -= results_dict[key]
+                else:
+                    grad[parm_idx] += results_dict[key]
 
         if use_jac:
             grad -= np.log(self.jacobian)
@@ -371,59 +337,50 @@ class LikelihoodVectorized(object):
 
         import numpy as np
 
-        if not self._three_point:
-            grad_diff *= 2.
-
-        self.apply_changes(
-            vec, grad=True, 
-            parm_idx_list=parm_idx_list, 
-            grad_diff=grad_diff)
-
         if isinstance(parm_idx_list, type(None)):
             parm_idx_list = list(range(self.N_parms))
 
+        system_dict = self.apply_changes(
+            vec, grad=True, 
+            parm_idx_list=parm_idx_list, 
+            grad_diff=grad_diff)
         worker_id_dict = dict()
-        for parm_idx in self.openmm_system_fwd_dict:
-            if not parm_idx in parm_idx_list:
-                continue
-            for sys_idx, openmm_system_dict in enumerate(self.openmm_system_fwd_dict[parm_idx]):
-                worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                worker_id_dict[worker_id] = [parm_idx], 1., sys_idx
-            if self._three_point:
-                for sys_idx, openmm_system_dict in enumerate(self.openmm_system_bkw_dict[parm_idx]):
-                    worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                    worker_id_dict[worker_id] = [parm_idx], -1., sys_idx
-        if not self._three_point:
-            sysname_run_list = list()
-            for sysname in self.openmm_system_dict:
-                if sysname in sysname_run_list:
-                    continue
-                _parm_idx_list = self.parm_idx_sysname_dict[sysname]
-                for parm_idx in parm_idx_list:
-                    if parm_idx in _parm_idx_list:
-                        worker_id = self.targetcomputer.__call__(
-                            {sysname:self.openmm_system_dict[sysname]}, False)
-                        worker_id_dict[worker_id] = _parm_idx_list, -1., sysname
-                        sysname_run_list.append(sysname)
-                        break
+        system_batch_dict = dict()
+        for key in system_dict:
+            #sys_name, sign, parm_idx = key
+            system_batch_dict[key] = system_dict[key]
+            if len(system_batch_dict) == self._N_sys_per_batch:
+                worker_id = self.targetcomputer(system_batch_dict, False, False)
+                worker_id_dict[worker_id] = list(system_batch_dict.keys())
+                system_batch_dict = dict()
+        if len(system_batch_dict) > 0:
+            worker_id = self.targetcomputer(system_batch_dict, False, False)
+            worker_id_dict[worker_id] = list(system_batch_dict.keys())
+            system_batch_dict = dict()
 
+        worker_id_list  = list(worker_id_dict.keys())
         grad = np.zeros(self.N_parms, dtype=float)
-        worker_id_list = list(worker_id_dict.keys())
         while worker_id_list:
             worker_id, worker_id_list = ray.wait(
                 worker_id_list, timeout=_TIMEOUT)
             failed = len(worker_id) == 0
             if not failed:
                 try:
-                    _logP_likelihood = ray.get(
+                    _logP_likelihood, results_dict = ray.get(
                         worker_id[0], timeout=_TIMEOUT)
                 except:
                     failed = True
                 if not failed:
-                    _parm_idx_list, sign, sys_idx = worker_id_dict[worker_id[0]]
-                    for parm_idx in parm_idx_list:
-                        if parm_idx in _parm_idx_list:
-                            grad[parm_idx] += sign * _logP_likelihood
+                    for key in results_dict:
+                        sys_name, (sys_idx, sign, parm_idx) = key
+                        if self._three_point:
+                            grad[parm_idx] += results_dict[key] * sign
+                        else:
+                            if parm_idx == -1:
+                                _parm_idx = self.parm_idx_sysname_dict[sys_idx]
+                                grad[list(_parm_idx)] -= results_dict[key]
+                            else:
+                                grad[parm_idx] += results_dict[key]
                     del worker_id_dict[worker_id[0]]
             if failed:
                 if len(worker_id) > 0:
@@ -432,21 +389,11 @@ class LikelihoodVectorized(object):
                 resubmit_list = retrieve_failed_workers(worker_id_list)
                 for worker_id in resubmit_list:
                     ray.cancel(worker_id, force=True)
-                    parm_idx, sign, sys_idx = worker_id_dict[worker_id]
+                    key_list = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
-                    if isinstance(sys_idx, int):
-                        if sign > 0.:
-                            openmm_system_dict = self.openmm_system_fwd_dict[parm_idx[0]][sys_idx]
-                        else:
-                            openmm_system_dict = self.openmm_system_bkw_dict[parm_idx[0]][sys_idx]
-                        worker_id = self.targetcomputer.__call__(openmm_system_dict, False)
-                    else:
-                        sysname = sys_idx
-                        worker_id = self.targetcomputer.__call__({sysname:self.openmm_system_dict[sysname]}, False)
-                        _parm_idx_list = self.parm_idx_sysname_dict[sysname]
-                        worker_id_dict[worker_id] = _parm_idx_list, -1., sysname
-
-                    worker_id_dict[worker_id] = parm_idx, sign, sys_idx
+                    worker_id = self.targetcomputer(
+                        {key:system_dict[key] for key in key_list}, False, False)
+                    worker_id_dict[worker_id] = key_list
                 worker_id_list = list(worker_id_dict.keys())
 
         if use_jac:

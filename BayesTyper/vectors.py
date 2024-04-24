@@ -47,19 +47,12 @@ def get_allocation_vector(parameter_manager):
     on the current state of parameter manager `parameter_manager`.
     """
 
+    ranks, indices = np.unique(
+            parameter_manager.force_ranks, return_index=True)
+    _allocations = np.zeros_like(ranks, dtype=int)
+    _allocations[:] = parameter_manager.force_group_idx_list[indices]
     allocations  = BaseVector(dtype=int)
-    unique_ranks = np.unique(parameter_manager.force_ranks)
-    allocations.append(
-        np.zeros(
-            unique_ranks.size, dtype=int
-            )
-        )
-
-    force_group_idxs = parameter_manager.force_group_idx_list
-
-    for idx, force_group_idx in enumerate(force_group_idxs):
-        rank = parameter_manager.force_ranks[idx]
-        allocations[rank] = force_group_idx
+    allocations.append(_allocations)
 
     return allocations
 
@@ -685,10 +678,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                 if parameter_name not in self.parameter_name_list:
                     self.exclude_list.append(parameter_name)
 
-        ### Make sure everything is flushed down to the 
-        ### parameter manager.
-        self.apply_changes()
-
     @property
     def parameters_per_force_group(self):
 
@@ -912,7 +901,8 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             self.parameter_manager.relocate_by_rank(
                 k, ### force_rank
                 z, ### force_group_idx
-                self.exclude_list
+                self.exclude_list,
+                update_forces=False
                 )
 
         ### Check if we have more force groups than we
@@ -944,7 +934,10 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
 
         self.apply_changes()
 
-    def apply_changes(self):
+    def apply_changes(
+        self, only_apply_to_systems=None):
+
+        _BATCHMODE_MIN = 1000
 
         ### Some sanity checking before we proceed.
         if self.allocations.size > 0:
@@ -956,41 +949,73 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                 theoretical_max = 0
             if actual_max > theoretical_max:
                 raise ValueError(
-                    f"{self.force_group_count} force groups, but maximum in allocation vector is {actual_max}."
-                    )
+                    f"{self.force_group_count} force groups, but maximum in allocation vector is {actual_max}.")
+
+        ### Organize the data properly, depending on how we want
+        ### to update the systems
+        if isinstance(only_apply_to_systems, type(None)):
+            ranks_list      = np.arange(self.allocations.size, dtype=int).tolist()
+            force_group_idx_list = np.arange(self.force_group_count, dtype=int).tolist()
+        else:
+            ranks_list = list()
+            force_group_idx_list = list()
+            for sys_idx in only_apply_to_systems:
+                if isinstance(sys_idx, (int, np.int_)):
+                    valids = np.where(
+                        self.parameter_manager.system_idx_list == sys_idx)[0]
+                elif isinstance(sys_idx, (str, np.str_)):
+                    valids = np.where(
+                        self.parameter_manager.system_name_list == sys_idx)[0]
+                else:
+                    raise ValueError(
+                        f"Datatype not understood.")
+                if valids.size == 0:
+                    continue
+                ranks = np.unique(self.parameter_manager.force_ranks[valids])
+                force_groups = np.unique(self.parameter_manager.force_group_idx_list[valids])
+                ranks_list.extend(
+                    ranks.tolist())
+                force_group_idx_list.extend(
+                    force_groups.tolist())
+            ranks_list = np.unique(ranks_list)
+            force_group_idx_list = np.unique(force_group_idx_list)
 
         ### First, make sure each force is in the right forcegroup
-        for k, z in enumerate(self.allocations):
+        for k in ranks_list:
+            z = self.allocations[k]
             self.parameter_manager.relocate_by_rank(
                 k, z, self.exclude_list, update_forces=False)
 
         ### Second, set the parameters
-        batch_mode = self.parameter_manager.N_systems > 50
+        if isinstance(only_apply_to_systems, type(None)):
+            batch_mode = self.parameter_manager.N_systems > _BATCHMODE_MIN
+        else:
+            batch_mode = len(only_apply_to_systems) > _BATCHMODE_MIN
         if batch_mode:
-            force_group_idx_list = list()
-            name_list = list()
-            value_list = list()
+            _force_group_idx_list = list()
+            _name_list = list()
+            _value_list = list()
 
-        vector_idx = 0
-        for force_group_idx in range(self.force_group_count):
+        for force_group_idx in force_group_idx_list:
+            vector_idx = force_group_idx * self.parameters_per_force_group
             if batch_mode:
-                force_group_idx_list.append(force_group_idx)
-                name_list.append([])
-                value_list.append([])
+                _force_group_idx_list.append(force_group_idx)
+                _name_list.append([])
+                _value_list.append([])
             for parameter_name in self.parameter_name_list:
                 if batch_mode:
-                    name_list[-1].append(parameter_name)
-                    value_list[-1].append(self.vector_k[vector_idx])
+                    _name_list[-1].append(parameter_name)
+                    _value_list[-1].append(self.vector_k[vector_idx])
                 else:
                     self.parameter_manager.set_parameter(
-                            force_group_idx, parameter_name, 
-                            self.vector_k[vector_idx])
+                        force_group_idx, parameter_name, 
+                        self.vector_k[vector_idx])
                 vector_idx += 1
         if batch_mode:
             self.parameter_manager.set_parameter_batch(
-                    force_group_idx_list,
-                    name_list,
-                    value_list)
+                    _force_group_idx_list,
+                    _name_list,
+                    _value_list)
 
         super().apply_changes()
 
@@ -1120,8 +1145,15 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
 
         assert len(values_0) == N_parms
 
-        name_list = list()
-        value_list = list()
+        _BATCHMODE_MIN = 1000
+
+        valids = self.parameter_manager.force_group_idx_list == force_group_idx
+        sys_idx_list = np.unique(self.parameter_manager.system_idx_list[valids])
+        batch_mode = sys_idx_list.size > _BATCHMODE_MIN
+        
+        if batch_mode:
+            name_list = list()
+            value_list = list()
         for parm_idx in range(N_parms):
             v0 = values_0[parm_idx]
             if isinstance(v0, _UNIT_QUANTITY):
@@ -1133,12 +1165,18 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             self._vector_k_vec[vector_idx + parm_idx] = values[parm_idx]
             ### This will update vector_k
             self[vector_idx + parm_idx] = values[parm_idx]
-            name_list.append(self.parameter_name_list[parm_idx])
-            value_list.append(self.vector_k[vector_idx + parm_idx])
-        self.parameter_manager.set_parameter_batch(
-                [force_group_idx],
-                name_list,
-                value_list)
+            if batch_mode:
+                name_list.append(self.parameter_name_list[parm_idx])
+                value_list.append(self.vector_k[vector_idx + parm_idx])
+            else:
+                self.parameter_manager.set_parameter(
+                        force_group_idx, self.parameter_name_list[parm_idx],
+                        self.vector_k[vector_idx + parm_idx])
+        if batch_mode:
+            self.parameter_manager.set_parameter_batch(
+                    [force_group_idx],
+                    [name_list],
+                    [value_list])
 
     def get_parameters_by_force_group(
         self, 
