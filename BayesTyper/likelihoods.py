@@ -73,30 +73,35 @@ class LikelihoodVectorized(object):
             pvec = self.pvec_list[i]
             self.jacobian.extend(
                 pvec.jacobian.tolist())
+            p_idx = 0
             for f in range(pvec.force_group_count):
                 ranks = pvec.allocations.index([f])[0]
+                system_idx_dict = dict()
                 for r in ranks:
                     valids = np.where(
-                        pvec.parameter_manager.force_ranks == r)
+                            pvec.parameter_manager.force_ranks == r)
                     system_idx_list = np.unique(
-                        pvec.parameter_manager.system_idx_list[valids])
-                    for p_idx in range(pvec.parameters_per_force_group):
-                        _p_idx = f*pvec.parameters_per_force_group+p_idx
-                        _parm_idx = parm_idx + p_idx
+                            pvec.parameter_manager.system_idx_list[valids])
+                    system_idx_dict[r] = system_idx_list
+                    for sys_idx in system_idx_list:
+                        if sys_idx not in parm_idx_sysname_dict:
+                            parm_idx_sysname_dict[sys_idx] = []
+
+                for _ in range(pvec.parameters_per_force_group):
+                    parm_idx_map_dict[parm_idx] = (i,p_idx)
+                    if parm_idx not in sysidx_parm_idx_dict:
+                        sysidx_parm_idx_dict[parm_idx] = []
+                    for r in ranks:
+                        system_idx_list = system_idx_dict[r]
                         for sys_idx in system_idx_list:
-                            if sys_idx in parm_idx_sysname_dict:
-                                if _parm_idx not in parm_idx_sysname_dict[sys_idx]:
-                                    parm_idx_sysname_dict[sys_idx].append(_parm_idx)
-                            else:
-                                parm_idx_sysname_dict[sys_idx] = [_parm_idx]
-                            if _parm_idx in sysidx_parm_idx_dict:
-                                if sys_idx not in sysidx_parm_idx_dict[_parm_idx]:
-                                    sysidx_parm_idx_dict[_parm_idx].append(sys_idx)
-                            else:
-                                sysidx_parm_idx_dict[_parm_idx] = [sys_idx]
-                        parm_idx_map_dict[_parm_idx] = (i,_p_idx)
-                self.N_parms += pvec.parameters_per_force_group
-                parm_idx     += pvec.parameters_per_force_group
+                            if parm_idx not in parm_idx_sysname_dict[sys_idx]:
+                                parm_idx_sysname_dict[sys_idx].append(parm_idx)
+                            if sys_idx not in sysidx_parm_idx_dict[parm_idx]:
+                                sysidx_parm_idx_dict[parm_idx].append(sys_idx)
+                    p_idx        += 1
+                    parm_idx     += 1
+
+        self.N_parms = parm_idx
         self.parm_idx_map_dict     = parm_idx_map_dict
         self.sysidx_parm_idx_dict  = dict()
         self.parm_idx_sysname_dict = dict()

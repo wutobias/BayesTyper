@@ -630,6 +630,9 @@ def set_parameters_remote(
                 _, _pvec_list, bitvec_type_all_list = ray.get(
                     worker_id[0], timeout=_TIMEOUT)
             except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
                 failed = True
             if not failed:
             
@@ -768,8 +771,8 @@ def set_parameters_remote(
                         )
                 worker_id_dict[worker_id] = args
             worker_id_list = list(worker_id_dict.keys())
-            import time
-            time.sleep(_TIMEOUT)
+            #import time
+            #time.sleep(_TIMEOUT)
 
     if found_improvement:
         for mngr_idx in range(N_mngr):
@@ -1141,6 +1144,9 @@ class BaseOptimizer(object):
                     _logP_likelihood, _ = ray.get(
                         worker_id[0], timeout=_TIMEOUT)
                 except:
+                    if _VERBOSE:
+                        import traceback
+                        print(traceback.format_exc())
                     failed = True
                 if not failed:
                     sys_idx = worker_id_dict[worker_id[0]]
@@ -1792,6 +1798,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 try:
                     result = ray.get(worker_id[0], timeout=_TIMEOUT)
                 except:
+                    if _VERBOSE:
+                        import traceback
+                        print(traceback.format_exc())
                     failed = True
                 if not failed:
                     grad_score_dict, grad_norm_dict, allocation_list, selection_list, type_list = result
@@ -1849,8 +1858,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                         )
                     args = _pvec_id, _targetcomputer_id, _type_i, _selection_i, _k_values_ij, _grad_diff, _N_trials, _N_sys_per_likelihood_batch, _mngr_idx, _system_idx_list
                     worker_id_dict[worker_id] = args
-                import time
-                time.sleep(_TIMEOUT)
+                #import time
+                #time.sleep(_TIMEOUT)
                 worker_id_list = list(worker_id_dict.keys())
 
         to_delete = list()
@@ -2103,10 +2112,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                     for sys_idx_pair in self.system_idx_list_batch:
                         time_diff_dict[sys_idx_pair] = 0.
                         pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
-                        pvec = pvec_list[0]
+                        pvec_id = ray.put(pvec_list[0])
                         for _ in range(N_trials_opt):
                             worker_id = _test_logL.remote(
-                                pvec, 
+                                pvec_id, 
                                 self.targetcomputer_id
                                 )
                             worker_id_dict[worker_id] = sys_idx_pair
@@ -2198,8 +2207,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                                             N_trials_gradient=N_trials_gradient,
                                             split_all=True)
                             except:
+                                if _VERBOSE:
+                                    import traceback
+                                    print(traceback.format_exc())
                                 failed = True
-                        if failed:
                             if len(worker_id) > 0:
                                 if worker_id[0] not in worker_id_list:
                                     worker_id_list.append(worker_id[0])
@@ -2225,8 +2236,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bounds_penalty=1000.) 
                                 minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
-                            import time
-                            time.sleep(_TIMEOUT)
+                            #import time
+                            #time.sleep(_TIMEOUT)
                             worker_id_list = list(minimize_initial_worker_id_dict.keys())
 
                     if self.verbose:
@@ -2349,13 +2360,16 @@ class ForceFieldOptimizer(BaseOptimizer):
                             selection_worker_id_list, timeout=_TIMEOUT*100)
                         failed = len(worker_id) == 0
                         if not failed:
-                            #try:
-                            #    _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
-                            #        worker_id[0], timeout=_TIMEOUT)
-                            #except:
-                            #    failed = True
-                            _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                            try:
+                                _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
                                     worker_id[0], timeout=_TIMEOUT)
+                            except:
+                                if _VERBOSE:
+                                    import traceback
+                                    print(traceback.format_exc()) 
+                                failed = True
+                            #_, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                            #        worker_id[0], timeout=_TIMEOUT)
                             if not failed:
                                 sys_idx_pair = self.selection_worker_id_dict[mngr_idx][worker_id[0]]
                                 if self.verbose:
