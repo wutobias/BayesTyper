@@ -68,7 +68,6 @@ def write_pdb(system_list, optdataset_dict):
                 xyz *= _LENGTH_AU
             engine = OpenmmEngine(
                 sys.openmm_system, 
-                sys.top, 
                 xyz
             )
             engine.set_xyz(xyz)
@@ -226,7 +225,7 @@ def get_plots(
                 xyz    = optdataset_dict[smiles][conf_i]["final_geo"]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
-                engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                engine = OpenmmEngine(sys.openmm_system, xyz)
                 engine.set_xyz(xyz)
                 zm = ZMatrix(sys.rdmol)
                 target_zm = zm.build_z_crds(
@@ -243,25 +242,20 @@ def get_plots(
                     ### Bonds
                     if z_idx > 0:
                         diff = target_zm[z_idx][0] - z_value[0]
-                        bond_diffs.append(
-                            diff.value_in_unit(_LENGTH)
-                            )
+                        bond_diffs.append(diff)
                     ### Angles
                     if z_idx > 1:
                         diff = abs(target_zm[z_idx][1] - z_value[1])
-                        angle_diffs.append(
-                            diff.value_in_unit(_ANGLE)
-                            )
+                        angle_diffs.append(diff)
                     ### Torsions
                     if z_idx > 2:
-                        diff = abs(target_zm[z_idx][2] - z_value[2])
+                        diff = abs(target_zm[z_idx][2] - z_value[2])*_ANGLE
                         diff = diff.in_units_of(_ANGLE)
                         if diff > 180.*_ANGLE:
                             diff = diff - 360.*_ANGLE
                             diff = abs(diff)
                         torsion_diffs.append(
-                            diff.value_in_unit(_ANGLE)
-                            )
+                            diff.value_in_unit(_ANGLE))
 
         if len(bond_diffs):
             axs[N_plots].hist(
@@ -320,7 +314,7 @@ def get_plots(
                 xyz = optdataset_dict[smiles][conf_i]["final_geo"]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
-                engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                engine = OpenmmEngine(sys.openmm_system, xyz)
                 engine.set_xyz(xyz)
                 engine.minimize()
                 hessian_mm = engine.compute_hessian() / unit.constants.AVOGADRO_CONSTANT_NA
@@ -367,7 +361,7 @@ def get_plots(
                 xyz         = geo_list_qm[0]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
-                engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                engine = OpenmmEngine(sys.openmm_system, xyz)
                 for ene, xyz in zip(ene_list_qm, geo_list_qm):
                     if not unit.is_quantity(ene):
                         ene *= _ENERGY_AU * unit.constants.AVOGADRO_CONSTANT_NA
@@ -433,7 +427,7 @@ def get_plots(
                     xyz = xyz_list[0]
                     if not unit.is_quantity(xyz):
                         xyz *= _LENGTH_AU
-                    engine = OpenmmEngine(sys.openmm_system, sys.top, xyz)
+                    engine = OpenmmEngine(sys.openmm_system, xyz)
                     for xyz, ene, crd in zip(xyz_list, ene_list, crd_list):
                         if not unit.is_quantity(xyz):
                             xyz *= _LENGTH_AU
@@ -520,6 +514,14 @@ def get_plots(
     
     return fig, axs, results_dict
 
+@ray.remote
+def generate_parameter_manager(sys_list, parm_mngr):
+
+    import copy
+    parm_mngr_cp = copy.deepcopy(parm_mngr)
+    for sys in sys_list:
+        parm_mngr_cp.add_system(sys)
+    return parm_mngr_cp
 
 def _remove_types(
     parameter_manager, 
@@ -529,15 +531,6 @@ def _remove_types(
     ):
 
     _CHUNK_SIZE = 20
-
-    @ray.remote
-    def generate_parameter_manager(sys_list, parm_mngr):
-
-        import copy
-        parm_mngr_cp = copy.deepcopy(parm_mngr)
-        for sys in sys_list:
-            parm_mngr_cp.add_system(sys)
-        return parm_mngr_cp
 
     from .vectors import ForceFieldParameterVector
     from .constants import _INACTIVE_GROUP_IDX
@@ -589,6 +582,62 @@ def _remove_types(
 
     return 1
 
+@ray.remote
+def __remove_torsion(openmm_system, improper_dihedral_list):
+
+    import openmm
+
+    openmm_system = openmm.XmlSerializer.deserialize(
+            openmm_system)
+    force_list = list()
+    for f in openmm_system.getForces():
+        force_list.append(
+                openmm.XmlSerializer.serialize(f))
+    for _ in range(openmm_system.getNumForces()):
+        openmm_system.removeForce(0)
+    for f in force_list:
+        _f = openmm.XmlSerializer.deserialize(f)
+        if isinstance(_f, openmm.PeriodicTorsionForce):
+            tforce = openmm.PeriodicTorsionForce()
+            for idx in range(_f.getNumTorsions()):
+                p1, p2, p3, p4, periodicity, phase, k = _f.getTorsionParameters(idx)
+                is_improper = False
+                for atm_idxs in improper_dihedral_list:
+                    if p1 == atm_idxs[0]:
+                        if set([p2,p3,p4]) == set(atm_idxs[1:]):
+                            is_improper = True
+                            break
+                if is_improper:
+                    tforce.addTorsion(p1,p2,p3,p4,periodicity,phase,k)
+            openmm_system.addForce(tforce)
+        else:
+            openmm_system.addForce(_f)
+    openmm_system = openmm.XmlSerializer.serialize(openmm_system)
+    return openmm_system
+
+
+def _remove_types_torsion(
+        system_list):
+
+    import openmm
+
+    worker_id_dict = dict()
+    for sys_idx in range(len(system_list)):
+        sys = system_list[sys_idx]
+        if isinstance(sys.openmm_system, str):
+            openmm_system = sys.openmm_system
+        else:
+            openmm_system = openmm.XmlSerializer.serialize(
+                    sys.openmm_system)
+        worker_id = __remove_torsion.remote(openmm_system, sys.improper_dihedrals)
+        worker_id_dict[worker_id] = sys_idx
+    worker_id_list = list(worker_id_dict.keys())
+    while worker_id_list:
+        [worker_id], worker_id_list = ray.wait(worker_id_list)
+        openmm_system = ray.get(worker_id)
+        sys_idx = worker_id_dict[worker_id]
+        system_list[sys_idx].openmm_system = openmm_system
+
 
 def remove_types(
     systemmanager,
@@ -615,7 +664,7 @@ def remove_types(
     if isinstance(systemmanager, list):
         system_list = systemmanager
     elif isinstance(systemmanager, system.SystemManager):
-        system_list = systemmanager.get_systems()
+        system_list = systemmanager._system_list
     else:
         raise ValueError(
             f"Datatype for SystemManager not understood."
@@ -629,19 +678,28 @@ def remove_types(
 
     for mngr in mngr_list:
         if isinstance(mngr, torsion_mngr_list):
-            for periodicity in range(1,11):
-                for phase in [0., 40., 90., 180., 270., 320., 360.]:
-                    phase *= np.pi/180.*unit.radian
-                    for sign in [-1.,1.]:
-                        _remove_types(
-                            parameter_manager = ProperTorsionManager(
-                                periodicity,
-                                phase,
-                                exclude_list = ["periodicity", "phase"]),
-                            system_list = system_list,
-                            remaining_type_idx = _INACTIVE_GROUP_IDX,
-                            set_inactive = True
-                        )
+            #for periodicity in range(1,11):
+            #    for phase in [0., 40., 90., 180., 270., 320., 360.]:
+            #        phase *= np.pi/180.*unit.radian
+            #        for sign in [-1.,1.]:
+            #            _remove_types(
+            #                parameter_manager = ProperTorsionManager(
+            #                    periodicity,
+            #                    phase,
+            #                    exclude_list = ["periodicity", "phase"]),
+            #                system_list = system_list,
+            #                remaining_type_idx = _INACTIVE_GROUP_IDX,
+            #                set_inactive = True
+            #            )
+            _remove_types_torsion(system_list)
+            _mngr = copy.deepcopy(mngr)
+            for _ in range(_mngr.N_systems):
+                _mgnr.remove_system(0)
+            _remove_types(
+                    parameter_manager=_mngr,
+                    system_list = system_list,
+                    remaining_type_idx = _INACTIVE_GROUP_IDX,
+                    set_inactive = True)
 
         elif isinstance(mngr, BondManager):
             _remove_types(
@@ -836,6 +894,7 @@ def generate_systemmanager(
     use_force = False,
     add_units=False,
     force_projection=False,
+    reference_to_lowest=True,
     verbose=False):
 
     __doc__ = """
@@ -1027,12 +1086,13 @@ def generate_systemmanager(
                                     torsiondataset_dict[smiles][conf_i][dih_i]["final_ene"]
                                         )
 
-                    target_dict_torsion = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in torsion_geo_list],
-                                            "energies"     : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
-                                            "rdmol"        : sys_target.rdmol,
-                                            "minimize"     : False,
-                                            "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale_torsion, 
-                                            "ene_weighting": ene_weighting,
+                    target_dict_torsion = { "structures"          : [TO_LENGTH_UNIT(_g) for _g in torsion_geo_list],
+                                            "energies"            : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
+                                            "rdmol"               : sys_target.rdmol,
+                                            "minimize"            : False,
+                                            "denom_ene"           : 1. * _ENERGY_PER_MOL * error_scale_torsion, 
+                                            "ene_weighting"       : ene_weighting,
+                                            "reference_to_lowest" : reference_to_lowest,
                                         }
                     if torsion_geo_list:
                         if target_dict_torsion["structures"]:
@@ -1068,12 +1128,13 @@ def generate_systemmanager(
 
         if use_offeq:
             if len(off_geo_list) > 0:
-                target_dict_ene = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in off_geo_list],
-                                    "energies"     : [TO_ENE_UNIT(_e) for _e in ene_list],
-                                    "rdmol"        : sys_target.rdmol,
-                                    "minimize"     : False,
-                                    "ene_weighting": ene_weighting,
-                                    "denom_ene"    : 1. * _ENERGY_PER_MOL * error_scale_offeq,
+                target_dict_ene = { "structures"          : [TO_LENGTH_UNIT(_g) for _g in off_geo_list],
+                                    "energies"            : [TO_ENE_UNIT(_e) for _e in ene_list],
+                                    "rdmol"               : sys_target.rdmol,
+                                    "minimize"            : False,
+                                    "ene_weighting"       : ene_weighting,
+                                    "reference_to_lowest" : reference_to_lowest, 
+                                    "denom_ene"           : 1. * _ENERGY_PER_MOL * error_scale_offeq,
                                 }
                 if target_dict_ene["structures"]:
                     sys.add_target(EnergyTarget, target_dict_ene)
@@ -1090,6 +1151,7 @@ def generate_systemmanager(
                                     "ene_weighting": ene_weighting,
                                     "denom_bond"   : 5.0e-0 * _FORCE * error_scale_force,
                                     "denom_angle"  : 5.0e-1 * _FORCE * error_scale_force,
+                                    "denom_force"  : 1.0e+4 * _FORCE * error_scale_force,
                                 }
                 if target_dict_frc["structures"]:
                     if force_projection:

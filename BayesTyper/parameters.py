@@ -721,6 +721,9 @@ class ParameterManager(object):
         ### This list stores all the OpenMM forces
         ### shape is `(self.N_systems,)`
         self.omm_force_list       = list()
+        ### Controls whether the system_list
+        ### should be included in deepcopy
+        self._include_system_list = True
 
     @property
     def N_systems(self):
@@ -745,6 +748,19 @@ class ParameterManager(object):
         else:
             return int(np.max(self.force_ranks))
 
+    def __deepcopy__(self, memo):
+
+        import copy
+        cls = self.__class__
+        result = cls.__new__(cls)
+        memo[id(self)] = result
+        for k, v in self.__dict__.items():
+            if k == "system_list":
+                if not self._include_system_list:
+                    continue
+            setattr(result, k, copy.deepcopy(v, memo))
+        return result
+    
     def remove_system(
         self,
         system_idx_list
@@ -1032,8 +1048,11 @@ class ParameterManager(object):
             if system_idx in openmm_system_dict:
                 openmm_system = openmm_system_dict[system_idx]
             else:
-                openmm_system = openmm.XmlSerializer.deserialize(
-                        self.system_list[system_idx].openmm_system)
+                if isinstance(self.system_list[system_idx].openmm_system, str):
+                    openmm_system = openmm.XmlSerializer.deserialize(
+                            self.system_list[system_idx].openmm_system)
+                else:
+                    openmm_system = self.system_list[system_idx].openmm_system
             force_idx    = self.omm_force_list[system_idx]
             force        = openmm_system.getForce(force_idx)
             atom_list    = self.atom_list[idx]
@@ -1277,8 +1296,11 @@ class ParameterManager(object):
             raise Exception(
                 f"Could not find force {self.force_tag} in system {system.name}.")
 
-        openmm_system = openmm.XmlSerializer.deserialize(
-                system.openmm_system)
+        if isinstance(system.openmm_system, str):
+            openmm_system = openmm.XmlSerializer.deserialize(
+                    system.openmm_system)
+        else:
+            openmm_system = system.openmm_system
         force = openmm_system.getForce(force_idx)
         self.omm_force_list.append(force_idx)
         self.system_list.append(system)
@@ -1305,7 +1327,7 @@ class ParameterManager(object):
             else:
                 _force_entity_list = np.append(
                     self.force_entity_list, 
-                    force_entity_list,
+                    np.array(force_entity_list, dtype=int),
                     axis=0).astype(int)
             self.force_entity_list = _force_entity_list
 
@@ -2062,7 +2084,7 @@ class MultiProperTorsionManager(ParameterManager):
         for dihedral_idx in range(force.getNumTorsions()):
             parms = force.getTorsionParameters(dihedral_idx)
             atm_idxs = list(parms[:4])
-            if atm_idxs in system.proper_dihedrals:
+            if (atm_idxs in system.proper_dihedrals) or (atm_idxs[::-1] in system.proper_dihedrals):
                 is_proper = True
                 for i in range(3):
                     neighbor_list = system.get_neighbor_atomidxs(atm_idxs[i])

@@ -46,18 +46,77 @@ def _test_logL(
 
     import time
 
-    _pvec_cp = _pvec.copy(include_systems=True, rebuild_to_old_systems=False)
+    _pvec_cp = _pvec.copy(include_systems=True)
     
     start_time = time.time()
 
     _ = batch_likelihood_typing(
         _pvec_cp,
         _targetcomputer,
-        [_pvec_cp.allocations[:].tolist()]*10,
-        )
+        [_pvec_cp.allocations[:].tolist()]*10)
 
     time_delta = time.time() - start_time
     return time_delta
+
+
+@ray.remote
+def likelihood_combine_pvec(
+    ref_pvec,
+    pvec_list_query,
+    bitvec_type_list_query,
+    parm_penalty,
+    bitvec_list_alloc_dict_list,
+    targetcomputer):
+
+    assert len(pvec_list_query) == len(bitvec_type_list_query)
+
+    N_queries   = len(pvec_list_query)
+    N_mngr      = len(ref_pvec)
+    ref_pvec_cp = [pvec.copy(include_systems=True) for pvec in ref_pvec]
+    system_list = ref_pvec_cp[0].parameter_manager.system_list
+    for mngr_idx in range(N_mngr):
+        ### IMPORANT: We must rebuild this with list of systems
+        ###           that is common to all parameter managers.
+        ref_pvec_cp[mngr_idx].rebuild_from_systems(
+            lazy=True, 
+            system_list=system_list)
+        ref_pvec_cp[mngr_idx].apply_changes()
+
+    logL = LikelihoodVectorized(
+            ref_pvec_cp, targetcomputer, three_point=False, N_sys_per_batch=8)
+
+    from .bitvector_typing import bitvec_hierarchy_to_allocations
+    results_dict = dict()
+    import itertools
+    for selection in itertools.product(range(N_queries), repeat=N_mngr):
+        failed = False
+        N_parms_all = 0
+        for mngr_idx in range(N_mngr):
+            sele_mngr_idx = selection[mngr_idx]
+            allocations = [-1 for _ in ref_pvec_cp[mngr_idx].allocations]
+            bitvec_hierarchy_to_allocations(
+                bitvec_list_alloc_dict_list[mngr_idx],
+                bitvec_type_list_query[sele_mngr_idx][mngr_idx],
+                allocations)
+            if allocations.count(-1) == 0:
+                ref_pvec_cp[mngr_idx].allocations[:] = allocations[:]
+                ref_pvec_cp[mngr_idx].reset(
+                    pvec_list_query[sele_mngr_idx][mngr_idx],
+                    ref_pvec_cp[mngr_idx].allocations)
+            else:
+                failed = True
+            N_parms_all += ref_pvec_cp[mngr_idx].size
+            if failed:
+                print(
+                    f"Selection {selection} failed.")
+                break
+        if not failed:
+            logL._initialize_systems()
+            x0   = logL.pvec[:]
+            aic = 2. * N_parms_all * parm_penalty - 2.*logL(x0)
+            results_dict[selection] = aic
+
+    return results_dict
 
 
 def batch_likelihood_typing(
@@ -158,9 +217,7 @@ def get_gradient_scores(
     ):
 
     ff_parameter_vector_cp = ff_parameter_vector.copy(
-        include_systems = True,
-        rebuild_to_old_systems = False
-        )
+        include_systems = True)
 
     N_types    = ff_parameter_vector_cp.force_group_count
 
@@ -648,7 +705,8 @@ def set_parameters_remote(
                 ### `full_reset=False` means we will set only the main
                 ### parameter manager to its optimized values and all other
                 ### are set to the best value.
-                for full_reset in [True, False]:
+                #for full_reset in [True, False]:
+                for full_reset in [True]:
                     for mngr_idx in range(N_mngr):
                         ### For the targeted mngr we just set the
                         ### parameter values to the optimized ones.
@@ -670,8 +728,7 @@ def set_parameters_remote(
                                     bitvec_type_all_list[mngr_idx],
                                     allocations
                                     )
-                                N_types = pvec_list_cp[mngr_idx].force_group_count
-                                if allocations.count(-1) == 0 and max(allocations) < N_types:
+                                if allocations.count(-1) == 0:
                                     pvec_list_cp[mngr_idx].allocations[:] = allocations
                                     pvec_list_cp[mngr_idx].reset(
                                         _pvec_list[mngr_idx],
@@ -783,7 +840,10 @@ def set_parameters_remote(
                 best_bitvec_type_list_list[mngr_idx]
                 )
 
-    return found_improvement, pvec_list_cp, bitvec_type_list_list_cp, best_AIC
+    for pvec in pvec_list_cp:
+        del pvec.parameter_manager.system_list
+
+    return found_improvement, pvec_list_cp, bitvec_type_list_list_cp, best_AIC, best_ast
 
 
 class BaseOptimizer(object):
@@ -796,6 +856,8 @@ class BaseOptimizer(object):
         verbose=False):
 
         self._max_neighbor = 3
+
+        self.name = name
 
         self.bounds_list = list()
         self.bounds_penalty_list = list()
@@ -835,21 +897,28 @@ class BaseOptimizer(object):
 
         self._initialize_targetcomputer()
 
+        self.generate_clustering()
+
+        import pickle
+        with open(f"{name}-system_list.pickle", "wb") as fopen:
+            pickle.dump(
+                self.system_list,
+                fopen)
+
+    def set_system_list(self, system_list):
+
+        self.clear_cache()
+        self.system_list = system_list
 
     def _initialize_targetcomputer(self):
 
         from .targets import TargetComputer
 
-        self.targetcomputer_id = ray.put(
-            TargetComputer(
-                self.system_list
-            )
-        )
+        self.targetcomputer = TargetComputer(
+                self.system_list)
 
-        self.targetcomputer = ray.get(
-            self.targetcomputer_id,
-            timeout=_TIMEOUT
-            )
+        self.targetcomputer_id = ray.put(
+            self.targetcomputer)
 
     def add_parameters(
         self,
@@ -1346,6 +1415,25 @@ class BaseOptimizer(object):
         self.N_parms_traj.append(N_parms_all)
 
 
+    def generate_clustering(self):
+
+        from rdkit.Chem import rdMolDescriptors as rdmd
+        from rdkit.Chem import DataStructs
+        import numpy as np
+        from scipy import cluster
+        from scipy.spatial import distance
+
+        nBits=1024
+        fp_list = np.zeros((self.N_systems, nBits), dtype=np.int8)
+        for sys_idx, sys in enumerate(self.system_list):
+            fp = rdmd.GetMorganFingerprintAsBitVect(sys.rdmol, 3, nBits=nBits)
+            arr = np.zeros((0,), dtype=np.int8)
+            DataStructs.ConvertToNumpyArray(fp,arr)
+            fp_list[sys_idx,:] = arr
+
+        self.obs = cluster.vq.whiten(fp_list.astype(float))
+ 
+
     def get_random_system_idx_list(
         self,
         N_sys_per_batch,
@@ -1354,22 +1442,7 @@ class BaseOptimizer(object):
         ):
         
         if cluster_systems:
-            from rdkit.Chem import rdMolDescriptors as rdmd
-            from rdkit.Chem import DataStructs
-            import numpy as np
-            from scipy import cluster
-            from scipy.spatial import distance
-            
-            nBits=1024
-            fp_list = np.zeros((self.N_systems, nBits), dtype=np.int8)
-            for sys_idx, sys in enumerate(self.system_list):
-                fp = rdmd.GetMorganFingerprintAsBitVect(sys.rdmol, 3, nBits=nBits)
-                arr = np.zeros((0,), dtype=np.int8)
-                DataStructs.ConvertToNumpyArray(fp,arr)
-                fp_list[sys_idx,:] = arr
-                
-            obs = cluster.vq.whiten(fp_list.astype(float))
-            centroid, label = cluster.vq.kmeans2(obs, N_sys_per_batch, iter=100)
+            centroid, label = cluster.vq.kmeans2(self.obs, N_sys_per_batch, iter=100)
             label_re = [list() for _ in range(N_sys_per_batch)]
             for i in range(self.N_systems):
                 k = label[i]
@@ -1386,7 +1459,6 @@ class BaseOptimizer(object):
                 sys_list = list(sys_list)
                 sys_list = tuple(sorted(sys_list))
                 system_idx_list_batch += tuple([sys_list])
-
         else:
             import numpy as np
             system_idx_list = np.arange(
@@ -1482,8 +1554,7 @@ class BaseOptimizer(object):
                     max_splits, 
                     pvec.allocations.size
                     ),
-                dtype=np.int16
-                )
+                dtype=np.int16)
 
             counts = 0
             for t_idx, _ in on_dict_sorted:
@@ -1569,6 +1640,26 @@ class ForceFieldOptimizer(BaseOptimizer):
         self.parm_penalty_split = parm_penalty_split
         self.parm_penalty_merge = parm_penalty_merge
 
+    def __getstate__(self):
+
+        state = self.__dict__.copy()
+        del state["parm_mngr_cache_dict"]
+        del state["bsm_cache_dict"]
+        #del state["system_list"]
+        del state["targetcomputer"]
+        del state["targetcomputer_id"]
+
+        state["parm_mngr_cache_dict"] = dict()
+        state["bsm_cache_dict"] = dict()
+        
+        return state
+
+    def __setstate__(self, state):
+
+        self.__dict__.update(state)
+        #self.system_list = list()
+        self.targetcomputer = None
+        self.targetcomputer_id = None
 
     def calculate_AIC(
         self,
@@ -2011,8 +2102,6 @@ class ForceFieldOptimizer(BaseOptimizer):
         optimize_system_ordering=True,
         ### Keep the `keep_N_best` solutions for each split
         keep_N_best = 10,
-        ### Prefix used for saving checkpoints
-        prefix = "ForceFieldOptimizer",
         ### Offset for numbering the output files
         output_offset = 0,
         ### Should we try to pickup this run from where we stopped last time?
@@ -2024,7 +2113,10 @@ class ForceFieldOptimizer(BaseOptimizer):
         system_idx_dict_batch = None,
         ### Whether to sample systems from clustering
         cluster_systems = False,
-        ):
+        ### Use this many systems for validation
+        N_systems_validation = 10,
+        ### Use this many validation iterations
+        N_iter_validation = 10):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
         from .bitvector_typing import bitvec_hierarchy_to_allocations
@@ -2059,6 +2151,12 @@ class ForceFieldOptimizer(BaseOptimizer):
             restart = False
         if not hasattr(self, "accepted_counter"):
             restart = False
+        if not hasattr(self, "best_ast_dict"):
+            restart = False
+        if not hasattr(self, "best_pvec_dict"):
+            restart = False
+        if not hasattr(self, "best_aic_dict"):
+            restart = False
         if not hasattr(self, "_N_sys_per_likelihood_batch"):
             self._N_sys_per_likelihood_batch = 4
 
@@ -2066,6 +2164,9 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
+            self.best_ast_dict  = dict()
+            self.best_pvec_dict = dict()
+            self.best_aic_dict  = dict()
             self.bitvec_dict = dict()
             self.split_iteration_idx = 0
             self.accepted_counter = 0
@@ -2078,6 +2179,7 @@ class ForceFieldOptimizer(BaseOptimizer):
             if iteration_idx > 0:
                 if (iteration_idx%pair_incr_split) == 0:
                     N_sys_per_batch_split += 1
+                    N_systems_validation  += 1
 
             raute_fill = ''.ljust(len(str(iteration_idx))-1,"#")
             print("ITERATION", iteration_idx)
@@ -2101,11 +2203,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                     if self.verbose:
                         print(
                             "Initial ordering of systems:",
-                            self.system_idx_list_batch
-                            )
+                            self.system_idx_list_batch)
                         print(
-                            "Optimizing system priority timings ..."
-                            )
+                            "Optimizing system priority timings ...")
 
                     worker_id_dict = dict()
                     time_diff_dict = dict()
@@ -2129,6 +2229,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                             try:
                                 results = ray.get(worker_id[0], timeout=_TIMEOUT)
                             except:
+                                if _VERBOSE:
+                                    import traceback
+                                    print(traceback.format_exc())
                                 failed = True
                             if not failed:
                                 sys_idx_pair = worker_id_dict[worker_id[0]]
@@ -2156,13 +2259,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                     if self.verbose:
                         print(
                             "Optimized ordering of systems:",
-                            self.system_idx_list_batch
-                            )
+                            self.system_idx_list_batch)
 
                 if self.verbose:
                     print(
-                        "Optimize parameters."
-                        )
+                        "Optimize parameters.")
                 if not restart:
                     minimize_initial_worker_id_dict = dict()
                     for sys_idx_pair in self.system_idx_list_batch:
@@ -2197,7 +2298,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                             try:
                                 _, pvec_list_cp, _ = ray.get(worker_id[0])
                                 sys_idx_pair = minimize_initial_worker_id_dict[worker_id[0]]
-                                del minimize_initial_worker_id_dict[worker_id[0]]
                                 for mngr_idx in range(self.N_mngr):
                                     split_worker_id_dict[mngr_idx,sys_idx_pair] = self.split_bitvector(
                                             mngr_idx,
@@ -2206,11 +2306,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                                             pvec_start=pvec_list_cp[mngr_idx],
                                             N_trials_gradient=N_trials_gradient,
                                             split_all=True)
+                                del minimize_initial_worker_id_dict[worker_id[0]]
                             except:
                                 if _VERBOSE:
                                     import traceback
                                     print(traceback.format_exc())
                                 failed = True
+                        if failed: 
                             if len(worker_id) > 0:
                                 if worker_id[0] not in worker_id_list:
                                     worker_id_list.append(worker_id[0])
@@ -2242,8 +2344,14 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                     if self.verbose:
                         print(
-                            "Obtaining votes and submitting parameter minimizations."
-                            )
+                            "Obtaining votes and submitting parameter minimizations.")
+                    self.sys_idx_list_validation = self.get_random_system_idx_list(
+                            N_systems_validation, N_iter_validation, cluster_systems)
+                    for sys_idx_validation in self.sys_idx_list_validation:
+                        for mngr_idx in range(self.N_mngr):
+                            self.best_ast_dict[mngr_idx, sys_idx_validation]  = None
+                            self.best_pvec_dict[mngr_idx, sys_idx_validation] = None
+                            self.best_aic_dict[mngr_idx, sys_idx_validation]  = None
                     for mngr_idx in range(self.N_mngr):
                         for sys_idx_pair in self.system_idx_list_batch:
                             votes_split_list = self.get_votes(
@@ -2251,32 +2359,52 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 low_to_high = True,
                                 abs_grad_score = False,
                                 norm_cutoff = 1.e-2,
-                                keep_N_best = keep_N_best,
-                                )
+                                keep_N_best = keep_N_best)
                             self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
                                 mngr_idx_main=mngr_idx,
                                 system_idx_list=sys_idx_pair,
                                 votes_split_list=votes_split_list,
-                                local_targets=False,
-                                )
+                                local_targets=False)
                             self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
                             for ast in votes_split_list:
                                 b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
                                 self.bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
+                            b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]                                
+                            if (mngr_idx, sys_idx_pair) in self.selection_worker_id_dict:
+                                del self.selection_worker_id_dict[mngr_idx, sys_idx_pair]
+                            for sys_idx_validation in self.sys_idx_list_validation:
+                                old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
+                                        system_idx_list=sys_idx_validation)
+                                bitvec_alloc_dict_list = list()
+                                for _mngr_idx in range(self.N_mngr):
+                                    _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
+                                            _mngr_idx, sys_idx_validation)
+                                    bitvec_alloc_dict_list.append(bitvec_alloc_dict)
+                                worker_id = set_parameters_remote.remote(
+                                    mngr_idx_main = mngr_idx,
+                                    pvec_list = old_pvec_list,
+                                    targetcomputer = self.targetcomputer_id,
+                                    bitvec_dict = b_list,
+                                    bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                    bitvec_type_list_list = old_bitvec_type_list,
+                                    worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                                    parm_penalty = self.parm_penalty_split,
+                                    verbose = self.verbose)
+                                if (mngr_idx, sys_idx_pair) not in self.selection_worker_id_dict:
+                                    self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
+                                self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
 
-                            if self.verbose:
-                                print(
-                                    f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
-                                    f"Found {len(votes_split_list)} candidate split solutions ...\n",
-                                    )
-                            del split_worker_id_dict[mngr_idx,sys_idx_pair]
+                        if self.verbose:
+                            print(
+                                f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
+                                f"Found {len(votes_split_list)} candidate split solutions ...\n")
+                        del split_worker_id_dict[mngr_idx,sys_idx_pair]
 
                     import pickle
-                    with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-SELECTION.pickle", "wb") as fopen:
+                    with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-SELECTION.pickle", "wb") as fopen:
                         pickle.dump(
                             self,
-                            fopen
-                        )
+                            fopen)
 
                     ### =============
                     ### END SPLITTING
@@ -2284,24 +2412,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 if self.verbose:
                     print(
-                        "Finding best parameters."
-                        )
+                        "Finding best parameters.")
                 self.system_idx_list_batch = self.system_idx_list_batch[::-1]
                 gibbs_dict = dict()
                 gibbs_count_dict = dict()
-                old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors()
-                best_AIC = self.calculate_AIC(
-                    parm_penalty=self.parm_penalty_split
-                    )
-                bitvec_alloc_dict_list = list()
-                for mngr_idx in range(self.N_mngr):
-                    _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
-                        mngr_idx,
-                        )
-                    bitvec_alloc_dict_list.append(
-                        bitvec_alloc_dict
-                        )
-                        
                 ### If we want to restart, first make sure that we re-run all
                 ### the left-over minimization runs
                 if restart:
@@ -2327,139 +2441,92 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bounds_penalty= self.bounds_penalty_list[mngr_idx],
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_scipy = True,
-                                    verbose = self.verbose,
-                                    )
+                                    verbose = self.verbose)
                             args = ast, system_list_id, self.targetcomputer_id, pvec_all_id, \
                                    bitvec_type_list_id, self.bounds_list, self.parm_penalty_split, \
                                    mngr_idx, self.bounds_penalty_list[mngr_idx], self._N_sys_per_likelihood_batch, \
                                    sys_idx_pair
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
+
+                        b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]                                
+                        if (mngr_idx, sys_idx_pair) in self.selection_worker_id_dict:
+                            del self.selection_worker_id_dict[mngr_idx, sys_idx_pair]
+                        for sys_idx_validation in self.sys_idx_list_validation:
+                            old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
+                                    system_idx_list=sys_idx_validation)
+                            bitvec_alloc_dict_list = list()
+                            for _mngr_idx in range(self.N_mngr):
+                                _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
+                                        _mngr_idx, sys_idx_validation)
+                                bitvec_alloc_dict_list.append(bitvec_alloc_dict)
+                            worker_id = set_parameters_remote.remote(
+                                mngr_idx_main = mngr_idx,
+                                pvec_list = old_pvec_list,
+                                targetcomputer = self.targetcomputer_id,
+                                bitvec_dict = b_list,
+                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                bitvec_type_list_list = old_bitvec_type_list,
+                                worker_id_dict = _minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                                parm_penalty = self.parm_penalty_split,
+                                verbose = self.verbose)
+                            if (mngr_idx, sys_idx_pair) not in self.selection_worker_id_dict:
+                                self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
+                            self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
 
-                for mngr_idx in range(self.N_mngr):
-                    self.selection_worker_id_dict[mngr_idx] = dict()
-                for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
-                    b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
-                    worker_id = set_parameters_remote.remote(
-                        mngr_idx_main = mngr_idx,
-                        pvec_list = old_pvec_list,
-                        targetcomputer = self.targetcomputer_id,
-                        bitvec_dict = b_list,
-                        bitvec_alloc_dict_list = bitvec_alloc_dict_list,
-                        bitvec_type_list_list = old_bitvec_type_list,
-                        worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
-                        parm_penalty = self.parm_penalty_split,
-                        verbose = self.verbose,
-                        )
-                    self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair
-
-                for mngr_idx in range(self.N_mngr):
-                    selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
+                selection_list = list(self.selection_worker_id_dict.keys())
+                for mngr_idx, sys_idx_pair in selection_list:
+                    selection_worker_id_list = list(
+                            self.selection_worker_id_dict[mngr_idx, sys_idx_pair].keys())
                     while selection_worker_id_list:
                         worker_id, selection_worker_id_list = ray.wait(
                             selection_worker_id_list, timeout=_TIMEOUT*100)
                         failed = len(worker_id) == 0
                         if not failed:
+                            sys_idx_validation = self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id[0]]
+                            best_AIC = self.best_aic_dict[mngr_idx, sys_idx_validation]
                             try:
-                                _, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                                _, pvec_list, best_bitvec_type_list, new_AIC, new_ast = ray.get(
                                     worker_id[0], timeout=_TIMEOUT)
                             except:
                                 if _VERBOSE:
                                     import traceback
                                     print(traceback.format_exc()) 
                                 failed = True
-                            #_, pvec_list, best_bitvec_type_list, new_AIC = ray.get(
+                            #_, pvec_list, best_bitvec_type_list, new_AIC, new_ast = ray.get(
                             #        worker_id[0], timeout=_TIMEOUT)
                             if not failed:
-                                sys_idx_pair = self.selection_worker_id_dict[mngr_idx][worker_id[0]]
-                                if self.verbose:
-                                    print("mngr_idx/sys_idx_pair", mngr_idx, "/", sys_idx_pair)
+                                if best_AIC == None:
+                                    found_improvement_mngr = True
+                                else:
+                                    found_improvement_mngr = new_AIC < best_AIC
 
-                                found_improvement_mngr = new_AIC < best_AIC
+                                del self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id[0]]
 
-                                if self.verbose:
-                                    print(
-                                        "Current best AIC:", best_AIC,
-                                        "New AIC:", new_AIC,
-                                        )
-                                    if found_improvement_mngr:
-                                        print(
-                                            f"Found improvement for sys {sys_idx_pair}."
-                                            )
-                                    else:
-                                        print(
-                                            f"Found no improvement for sys {sys_idx_pair}.",
-                                            )
-
-                                del self.selection_worker_id_dict[mngr_idx][worker_id[0]]
-                                del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
-                                del self.bitvec_dict[mngr_idx, sys_idx_pair]
-                                
                                 if found_improvement_mngr:
-                                    found_improvement = True
-                                    best_AIC = new_AIC
+                                    self.best_aic_dict[mngr_idx, sys_idx_validation]  = new_AIC
+                                    self.best_ast_dict[mngr_idx, sys_idx_validation]  = new_ast, mngr_idx, sys_idx_pair
+                                    self.best_pvec_dict[mngr_idx, sys_idx_validation] = pvec_list, best_bitvec_type_list
                                 else:
                                     continue
 
-                                if self.verbose:
-                                    print("Solution globally accepted.")
-                                for _mngr_idx in range(self.N_mngr):
-                                    old_pvec_list[_mngr_idx].reset(
-                                        pvec_list[_mngr_idx]
-                                        )
-                                    old_bitvec_type_list[_mngr_idx] = copy.deepcopy(
-                                        best_bitvec_type_list[_mngr_idx])
-                                    if self.verbose:
-                                        print(
-                                            f"Updated parameters for mngr {_mngr_idx}:",
-                                            old_pvec_list[_mngr_idx].vector_k,
-                                            f"with {old_pvec_list[_mngr_idx].force_group_count} force groups"
-                                            )
-                                        print(
-                                            f"Updated allocations for mngr {_mngr_idx}:",
-                                            old_pvec_list[_mngr_idx].allocations
-                                        )
-                                        print(
-                                            f"Updated bitvec hashes for mngr {_mngr_idx}:",
-                                            old_bitvec_type_list[_mngr_idx]
-                                            )
-                                        print(
-                                            f"Updated SMARTS hierarchy for mngr {_mngr_idx}:"
-                                            )
-
-                                        bsm, _ = self.generate_bitsmartsmanager(_mngr_idx)
-                                        for idx, b in enumerate(old_bitvec_type_list[_mngr_idx]):
-                                            sma = bsm.bitvector_to_smarts(b)
-                                            print(
-                                                f"Type {idx} : {sma}"
-                                                )
-
-                                if found_improvement_mngr:
-                                    for _mngr_idx in range(self.N_mngr):
-                                        self.update_best(
-                                            _mngr_idx,
-                                            old_pvec_list[_mngr_idx],
-                                            old_bitvec_type_list[_mngr_idx]
-                                            )
-
-                                import pickle
-                                with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
-                                    pickle.dump(
-                                        self,
-                                        fopen
-                                    )
-                                self.accepted_counter += 1
-                                
                         if failed:
                             if len(worker_id) > 0:
                                 if worker_id[0] not in selection_worker_id_list:
                                     selection_worker_id_list.append(worker_id[0])
                             resubmit_list = retrieve_failed_workers(selection_worker_id_list)
                             for worker_id in resubmit_list:
-                                sys_idx_pair = self.selection_worker_id_dict[mngr_idx][worker_id]
+                                sys_idx_validation = self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id[0]]
+                                old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
+                                        system_idx_list=sys_idx_validation)
+                                bitvec_alloc_dict_list = list()
+                                for _mngr_idx in range(self.N_mngr):
+                                    _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
+                                            _mngr_idx, sys_idx_validation)
+                                    bitvec_alloc_dict_list.append(bitvec_alloc_dict)
                                 b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
                                 ray.cancel(worker_id, force=True)
-                                del self.selection_worker_id_dict[mngr_idx][worker_id]
+                                del self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id]
 
                                 worker_id = set_parameters_remote.remote(
                                     mngr_idx_main = mngr_idx,
@@ -2470,10 +2537,107 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bitvec_type_list_list = old_bitvec_type_list,
                                     worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
                                     parm_penalty = self.parm_penalty_split,
-                                    verbose = self.verbose,
-                                    )
-                                self.selection_worker_id_dict[mngr_idx][worker_id] = sys_idx_pair
-                            selection_worker_id_list = list(self.selection_worker_id_dict[mngr_idx].keys())
+                                    verbose = self.verbose)
+                                self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = mngr_idx, sys_idx_pair
+                            selection_worker_id_list = list(
+                                    self.selection_worker_id_dict[mngr_idx, sys_idx_pair].keys())
+
+                    del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
+                    del self.bitvec_dict[mngr_idx,sys_idx_pair]
+                    del self.selection_worker_id_dict[mngr_idx,sys_idx_pair]
+
+                    import pickle
+                    with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
+                        pickle.dump(
+                                self,
+                                fopen)
+                    self.accepted_counter += 1
+
+                ### Now figure out the best ast
+                best_ast_vote_dict  = dict()
+                best_pvec_vote_dict = dict()
+                for mngr_idx in range(self.N_mngr):
+                    best_ast_vote_dict[mngr_idx]  = dict()
+                    best_pvec_vote_dict[mngr_idx] = dict()
+                for mngr_idx, sys_idx_validation in self.best_ast_dict:
+                    best_ast = self.best_ast_dict[mngr_idx, sys_idx_validation]
+                    if best_ast in best_ast_vote_dict[mngr_idx]:
+                        best_ast_vote_dict[mngr_idx][best_ast] += 1
+                    else:
+                        best_ast_vote_dict[mngr_idx][best_ast] = 1
+                        best_pvec_vote_dict[mngr_idx][best_ast] = self.best_pvec_dict[mngr_idx, sys_idx_validation]
+
+                ### Figure out if we can combine the individual solutions
+                worker_id_dict = dict()
+                for sys_idx_validation in self.sys_idx_list_validation:
+                    old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
+                            system_idx_list=sys_idx_validation)
+                    bitvec_list_alloc_dict_list = list()
+                    for mngr_idx in range(self.N_mngr):
+                        _, bitvec_list_alloc_dict = self.generate_bitsmartsmanager(
+                            mngr_idx, 
+                            sys_idx_validation)
+                        bitvec_list_alloc_dict_list.append(
+                            bitvec_list_alloc_dict)
+
+                    pvec_list_query = list()
+                    bitvec_type_list_query = list()
+                    for mngr_idx in range(self.N_mngr):
+                        best_ast = max(
+                            best_ast_vote_dict[mngr_idx], key=best_ast_vote_dict[mngr_idx].get)
+                        pvec_list, bitvec_type_list = best_pvec_vote_dict[mngr_idx][best_ast]
+                        pvec_list_query.append(pvec_list)
+                        bitvec_type_list_query.append(bitvec_type_list)
+
+                    worker_id = likelihood_combine_pvec.remote(
+                        old_pvec_list, pvec_list_query, bitvec_type_list_query,
+                        self.parm_penalty_split, bitvec_list_alloc_dict_list, 
+                        self.targetcomputer_id)
+                    worker_id_dict[worker_id] = sys_idx_validation
+
+                best_likelihood_vote_dict  = dict()
+                worker_id_list = list(worker_id_dict.keys())
+                while worker_id_list:
+                    [worker_id], worker_id_list = ray.wait(worker_id_list)
+                    results_dict = ray.get(worker_id)
+                    
+                    sys_idx_validation = worker_id_dict[worker_id]
+                    best_selection = min(results_dict, key=results_dict.get)
+                    if best_selection in best_likelihood_vote_dict:
+                        best_likelihood_vote_dict[best_selection] += 1
+                    else:
+                        best_likelihood_vote_dict[best_selection] = 1
+
+                best_selection = max(
+                    best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
+                print(
+                    f"Best Selection {best_selection}")
+                for mngr_idx in range(self.N_mngr):
+                    best_mngr_idx = best_selection[mngr_idx]
+                    best_ast = max(
+                        best_ast_vote_dict[best_mngr_idx], key=best_ast_vote_dict[best_mngr_idx].get)
+                    pvec_list, bitvec_type_list = best_pvec_vote_dict[best_mngr_idx][best_ast]
+                    self.update_best(
+                        mngr_idx,
+                        pvec_list[mngr_idx],
+                        bitvec_type_list[mngr_idx])
+                    if self.verbose:
+                        print(
+                            f"Updating manager {mngr_idx} from manager optimization {best_mngr_idx}")
+                        print(
+                            f"Updated parameters for mngr {mngr_idx}:")
+                        bsm, _ = self.generate_bitsmartsmanager(mngr_idx)
+                        for idx, b in enumerate(bitvec_type_list[mngr_idx]):
+                            try:
+                                sma   = bsm.bitvector_to_smarts(b)
+                            except:
+                                sma   = "???"
+                            start = pvec_list[mngr_idx].parameters_per_force_group * idx
+                            stop  = start + pvec_list[mngr_idx].parameters_per_force_group
+                            vec   = pvec_list[mngr_idx].vector_k[start:stop]
+                            vec_str = ",".join([str(v) for v in vec])
+                            print(
+                                f"{idx} {pvec_list[mngr_idx].force_group_histogram[idx]}: {vec_str} {sma}")
 
                 self.split_iteration_idx += 1
 
@@ -2482,6 +2646,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 self.system_idx_list_batch = []
                 self.minscore_worker_id_dict = dict()
                 self.selection_worker_id_dict = dict()
+                self.best_ast_dict = dict()
+                self.best_pvec_dict = dict()
+                self.best_aic_dict = dict()
                 self.bitvec_dict = dict()
                 self.accepted_counter = 0
 
@@ -2498,6 +2665,9 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
+            self.best_ast_dict = dict()
+            self.best_pvec_dict = dict()
+            self.best_aic_dict = dict()
             self.bitvec_dict = dict()
             # self.split_iteration_idx must be reset here
             self.split_iteration_idx = 0
@@ -2554,7 +2724,7 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.garbage_collection()
             
             import pickle
-            with open(f"{prefix}-MAIN-{iteration_idx+output_offset}-GARBAGE_COLLECTION.pickle", "wb") as fopen:
+            with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-GARBAGE_COLLECTION.pickle", "wb") as fopen:
                 pickle.dump(
                     self,
                     fopen
@@ -2570,7 +2740,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 print("")
 
             import pickle
-            with open(f"{prefix}-MAIN-{iteration_idx+output_offset}.pickle", "wb") as fopen:
+            with open(f"{self.name}-MAIN-{iteration_idx+output_offset}.pickle", "wb") as fopen:
                 pickle.dump(
                     self,
                     fopen

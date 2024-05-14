@@ -769,26 +769,19 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
             )
 
 
-    def copy(self, include_systems=False, rebuild_to_old_systems=False):
+    def copy(self, include_systems=False):
 
         import copy
+        _old_state = self.parameter_manager._include_system_list
+        self.parameter_manager._include_system_list = include_systems
 
         self_cp = copy.deepcopy(self)
 
-        if not include_systems:
-            if hasattr(self_cp.parameter_manager, "system_list"):
-                del self_cp.parameter_manager.system_list
-        else:
-            if rebuild_to_old_systems:
-                self_cp.rebuild_from_systems(
-                    lazy = True,
-                    system_list = self.parameter_manager.system_list
-                    )
-            else:
-                self_cp.rebuild_from_systems(
-                    lazy = True,
-                    system_list = self_cp.parameter_manager.system_list
-                    )
+        if include_systems:
+            self_cp.rebuild_from_systems(
+                lazy = True,
+                system_list = self_cp.parameter_manager.system_list)
+        self.parameter_manager._include_system_list = _old_state
 
         return self_cp
 

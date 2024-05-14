@@ -390,9 +390,9 @@ def run_geotarget(
 
 
 def run_energytarget(
-    openmm_system, target_strcs, target_energies, target_denom, 
+    openmm_system, target_strcs, target_energies, 
     denom_ene, minimize, restraint_atom_indices=list(), restraint_k=list(),
-    return_results_dict=False):
+    reference_to_lowest=True, ene_weighting=True, return_results_dict=False):
 
     engine  = OpenmmEngine(
         openmm_system,
@@ -404,11 +404,34 @@ def run_energytarget(
 
     rss  = 0.
     diff = 0.
-
-    min_ene_arg = np.argmin(target_energies)
-    engine.xyz  = target_strcs[min_ene_arg]
+    
     N_restraints = len(restraint_atom_indices)
     N_strcs = len(target_strcs)
+
+    ### Find weights for energies.
+    ### See Parsley paper:
+    ### doi.org/10.26434/chemrxiv.13082561.v2
+    if reference_to_lowest:
+        target_denom = np.ones(N_strcs, dtype=float)
+        delta_target_energies = target_energies - np.min(target_energies)
+    else:
+        target_denom = np.ones((N_strcs, N_strcs), dtype=float)
+        _delta_target_energies = np.reshape(target_energies, (N_strcs, 1))
+        delta_target_energies  = _delta_target_energies - _delta_target_energies.transpose()
+    if ene_weighting:
+        _ene_unit  = (1.*_ENERGY_PER_MOL).value_in_unit(unit.kilocalorie_per_mole)
+        _lower     = _ene_unit
+        _upper     = 5. * _ene_unit
+        valids1 = np.where(delta_target_energies < _lower)
+        valids2 = np.where((_lower < delta_target_energies) * ( _upper > delta_target_energies))
+        valids3 = np.where(delta_target_energies > _upper)
+        target_denom[valids1] = 1.
+        target_denom[valids2] = np.sqrt(_lower + (target_denom[valids2] - _lower)**2)
+        target_denom[valids3] = 0.
+
+    _target_denom = target_denom / np.sum(target_denom, axis=0)
+    target_denom  = _target_denom
+
     ### Important: Add the forces only through the engine.
     ### The original openmm_system object must remain untouched.
     if N_restraints > 0:
@@ -441,34 +464,37 @@ def run_energytarget(
             else:
                 NotImplementedError
 
-    if minimize:
-        engine.minimize()
-    ref_ene = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
-
+    energy_list = np.zeros(N_strcs)
     for strc_idx in range(N_strcs):
-        if strc_idx == min_ene_arg:
-            continue
-        if target_denom[strc_idx] == 0.:
-            continue
-        target_strc    = target_strcs[strc_idx]
-        target_pot_ene = target_energies[strc_idx]
-        engine.xyz     = target_strc * _LENGTH
-
+        target_strc = target_strcs[strc_idx]
+        engine.xyz  = target_strc * _LENGTH
         if minimize:
             engine.minimize()
-        pot_ene  = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
-        pot_ene  = pot_ene - ref_ene
-        _diff    = pot_ene - target_pot_ene
-        _rss     = _diff**2 * target_denom[strc_idx] / denom_ene**2
+        energy_list[strc_idx] = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
 
-        diff_dict[strc_idx] = _diff * _ENERGY_PER_MOL
-        rss_dict[strc_idx]  = _rss
-        vals_dict[strc_idx] = pot_ene
+    if reference_to_lowest:
+        delta_energies = energy_list - np.min(energy_list)
+    else:
+        _delta_energies = np.reshape(energy_list, (N_strcs, 1))
+        delta_energies  = _delta_energies - _delta_energies.transpose()
 
-        rss  += _rss
-        diff += _diff
+    _diff = delta_energies - delta_target_energies
+    if not reference_to_lowest:
+        _diff /= float(N_strcs)
+    _rss  = _diff**2 * target_denom / denom_ene**2
 
-    diff *= _ENERGY_PER_MOL
+    for strc_idx in range(N_strcs):
+        if reference_to_lowest:
+            diff_dict[strc_idx] = _diff[strc_idx] * _ENERGY_PER_MOL
+            rss_dict[strc_idx]  = _rss[strc_idx]
+            vals_dict[strc_idx] = delta_energies[strc_idx]
+        else:
+            diff_dict[strc_idx] = np.mean(_diff[strc_idx]) * _ENERGY_PER_MOL
+            rss_dict[strc_idx]  = np.mean(_rss[strc_idx])
+            vals_dict[strc_idx] = np.mean(delta_energies[strc_idx])
+
+    diff = np.sum(_diff) * _ENERGY_PER_MOL
+    rss  = np.sum(_rss)
     log_norm_factor  = np.log(denom_ene)
 
     del engine
@@ -505,11 +531,11 @@ def run_forcematchingtarget(
         target_strc  = target_strcs[strc_idx]
         target_force = target_forces[strc_idx]
         engine.xyz   = target_strc * _LENGTH
-        forces       = engine.forces.value_in_unit(_FORCE)
+        forces       = engine.forces.value_in_unit(_FORCE).flatten()
         ### This same as computing length of diff vector
         ### and then taking square
-        _diff        = abs(forces - target_force)
-        _diff2       = np.sum(_diff**2, axis=1)
+        _diff        = abs(forces - target_force.flatten())
+        _diff2       = np.sum(_diff**2)
         _rss         = _diff2 / denom_force**2
         _rss        /= float(N_atoms * 3)
 
@@ -572,7 +598,7 @@ def run_forceprojectionmatchingtarget(
         target_strc  = target_strcs[strc_idx]
         target_force = target_force_projection[strc_idx]
         engine.xyz   = target_strc * _LENGTH
-        forces       = engine.forces.value_in_unit(_FORCE)
+        forces       = engine.forces.value_in_unit(_FORCE).flatten()
 
         B_flat  = B_flat_list[strc_idx]
         force_q = build_grad_projection(
@@ -1285,13 +1311,11 @@ class ForceMatchingTarget(Target):
 
         super().__init__(target_dict, system)
 
-        ### Default denomiators taken from Parsley paper:
-        ### doi.org/10.26434/chemrxiv.13082561.v2
-        self.denom_force = 100.
+        self.denom_force = 1.0e+4
 
         if "denom_force" in target_dict:
             self.denom_force = target_dict["denom_force"]
-            self.denom_force = self.denom_frq.value_in_unit(_FORCE)
+            self.denom_force = self.denom_force.value_in_unit(_FORCE)
 
         self.target_forces = list()
         for target_force in target_dict["forces"]:
@@ -1373,6 +1397,10 @@ class EnergyTarget(Target):
             self.denom_ene = target_dict["denom_ene"]
             self.denom_ene = self.denom_ene.value_in_unit(_ENERGY_PER_MOL)
 
+        self.reference_to_lowest = True
+        if "reference_to_lowest" in target_dict:
+            self.reference_to_lowest = target_dict["reference_to_lowest"]
+
         self.target_energies = list()
         for target_energy in target_dict["energies"]:
             has_mole = False
@@ -1384,35 +1412,6 @@ class EnergyTarget(Target):
                 target_energy *= unit.constants.AVOGADRO_CONSTANT_NA
             target_energy  = target_energy.value_in_unit(_ENERGY_PER_MOL)
             self.target_energies.append(target_energy)
-        ### Substract the lowest energy from all energies
-        self.target_energies = np.array(self.target_energies)
-        min_ene              = np.min(self.target_energies)
-        self.target_energies = self.target_energies - min_ene
-        self.min_ene_arg     = np.argmin(self.target_energies)
-
-        ### Find weights for energies.
-        ### See Parsley paper:
-        ### doi.org/10.26434/chemrxiv.13082561.v2
-        self.target_denom = list()
-        if self.ene_weighting:
-            for strc_idx in range(self.N_strcs):
-                target_energy = self.target_energies[strc_idx] * _ENERGY_PER_MOL
-                target_energy_kcal = target_energy.value_in_unit(unit.kilocalorie_per_mole)
-
-                if target_energy_kcal < 1.:
-                    w = 1.
-                elif 1. <= target_energy_kcal < 5.:
-                    w = np.sqrt(1. + (target_energy_kcal - 1.)**2)
-                else:
-                    w = 0.
-                self.target_denom.append(w)
-            self.target_denom  = np.array(self.target_denom)
-            self.target_denom /= np.sum(self.target_denom)
-        else:
-            self.target_denom  = np.zeros(self.N_strcs)
-            self.target_denom[:] = 1./self.target_denom.size
-
-        assert len(self.target_strcs) ==  len(self.target_energies)
 
         ### ---------------------------
         ### 2.) Setup target restraints
@@ -1441,14 +1440,18 @@ class EnergyTarget(Target):
 
     def get_args(self):
 
+        if not hasattr(self, "reference_to_lowest"):
+            self.reference_to_lowest = True
+
         args = {
             "target_strcs"           : self.target_strcs,
             "target_energies"        : self.target_energies,
-            "target_denom"           : self.target_denom,
             "denom_ene"              : self.denom_ene,
             "minimize"               : self.minimize,
             "restraint_atom_indices" : self.restraint_atom_indices,
-            "restraint_k"            : self.restraint_k}
+            "restraint_k"            : self.restraint_k,
+            "reference_to_lowest"    : self.reference_to_lowest,
+            "ene_weighting"          : self.ene_weighting}
 
         return args
 
