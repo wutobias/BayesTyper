@@ -1440,7 +1440,10 @@ class BaseOptimizer(object):
         N_batches,
         cluster_systems = False,
         ):
-        
+
+        from scipy import cluster
+        import numpy as np
+
         if cluster_systems:
             centroid, label = cluster.vq.kmeans2(self.obs, N_sys_per_batch, iter=100)
             label_re = [list() for _ in range(N_sys_per_batch)]
