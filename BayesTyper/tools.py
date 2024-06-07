@@ -2058,24 +2058,22 @@ def retrieve_complete_dataset(
                 ### SUBMIT FORCE CALCULATIONS ###
                 ### ========================= ###
 
-                z_crds_initial = zmat.build_z_crds(qcentry.geometry * _LENGTH_AU)
+                z_crds_initial = zmat.build_z_crds(qcentry.geometry * _LENGTH_AU, with_units=True)
                 for _ in range(n_samples):
                     z_crds_copy = copy.deepcopy(z_crds_initial)
                     for z_idx in range(1, zmat.N_atms):
                         z_crd   = z_crds_copy[z_idx]
+                        ### unit is nm
                         if generate_forces_bonds:
-                            z_crd[0] += np.random.normal(
-                            0, 
-                            1.0e-2) * z_crd[0].unit
+                            ### Unit is nm
+                            z_crd[0] += np.random.normal(0, 1.0e-2) * _LENGTH
                         if len(z_crd) > 1 and generate_forces_angles:
-                            z_crd[1] += np.random.normal(
-                            0, 
-                            10.0e+0) * z_crd[1].unit
+                            ### Unit is deg
+                            z_crd[1] += np.random.normal(0, 2.0e+0) * _ANGLE
                         if len(z_crd) > 2 and generate_forces_torsions:
-                            z_crd[2] += np.random.normal(
-                            0, 
-                            10.0e-0) * z_crd[2].unit
-                        z_crds_copy[z_idx] = z_crd
+                            ### Unit is deg
+                            z_crd[2] += np.random.normal(0, 5.0e+0) * _ANGLE
+                        z_crds_copy[z_idx] = z_crd 
                     qcentry_cp = copy.deepcopy(qcentry)
                     crds3d     = zmat.build_cart_crds(z_crds_copy)
                     crds3d     = crds3d.value_in_unit(_LENGTH_AU)
@@ -2566,7 +2564,7 @@ def retrieve_optimization_dataset(
                     continue
                 zmat = ZMatrix(rdmol)
                 geo  = qcrecord.final_molecule.geometry
-                z_crds_initial = zmat.build_z_crds(geo * _LENGTH_AU)
+                z_crds_initial = zmat.build_z_crds(geo * _LENGTH_AU, with_units=True)
                 worker_list = list()
                 for _ in range(n_samples):
                     z_crds_copy = copy.deepcopy(z_crds_initial)
@@ -2578,18 +2576,16 @@ def retrieve_optimization_dataset(
                         z_crd   = z_crds_copy[z_idx]
 
                         if generate_forces_bonds:
-                            z_crd[0] += np.random.normal(
-                            0, 
-                            1.0e-2) * z_crd[0].unit
-                        if len(z_crd) > 1 and  generate_forces_angles:
-                            z_crd[1] += np.random.normal(
-                            0, 
-                            10.0e+0) * z_crd[1].unit
-                        if len(z_crd) > 2 and  generate_forces_torsions:
-                            z_crd[2] += np.random.normal(
-                            0, 
-                            5.0e-0) * z_crd[2].unit
-                        z_crds_copy[z_idx] = z_crd
+                            ### Unit is nm
+                            z_crd[0] += np.random.normal(0, 1.0e-2) * _LENGTH
+                        if len(z_crd) > 1 and generate_forces_angles:
+                            ### Unit is deg
+                            z_crd[1] += np.random.normal(0, 2.0e+0) * _ANGLE
+                        if len(z_crd) > 2 and generate_forces_torsions:
+                            ### Unit is deg
+                            z_crd[2] += np.random.normal(0, 5.0e+0) * _ANGLE
+                        z_crds_copy[z_idx] = z_crd 
+
                     crds3d    = zmat.build_cart_crds(z_crds_copy).value_in_unit(unit.angstrom)
                     input_str = ""
                     for atm_idx in range(zmat.N_atms):

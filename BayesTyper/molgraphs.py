@@ -1872,7 +1872,7 @@ class ZMatrix(object):
             z_string.append("".join(z_row))
         return "\n".join(z_string)
 
-    def build_z_crds(self, crds):
+    def build_z_crds(self, crds, with_units=False):
 
         __doc__ = """
         Build zmat coordinates expecting that ordering
@@ -1883,25 +1883,39 @@ class ZMatrix(object):
         z_crds_dict = dict()
         for z_idx, atm_idxs in self.z.items():
             z_crds_dict[z_idx] = list()
+            
             if z_idx == 0:
-                z_crds_dict[z_idx].append(
-                    crds[atm_idxs[0]].value_in_unit(_LENGTH))
+                if with_units:
+                    z_crd = crds[atm_idxs[0]].in_units_of(_LENGTH)
+                else:
+                    z_crd = crds[atm_idxs[0]].value_in_unit(_LENGTH)
+                z_crds_dict[z_idx].append(z_crd)
             if z_idx > 0:
                 dist = pts_to_bond(crds[atm_idxs[0]],
                                    crds[atm_idxs[1]])
-                z_crds_dict[z_idx].append(
-                    dist.value_in_unit(_LENGTH))
+                if with_units:
+                    z_crd = dist.in_units_of(_LENGTH)
+                else:
+                    z_crd = dist.value_in_unit(_LENGTH)
+                z_crds_dict[z_idx].append(z_crd)
             if z_idx > 1:
                 ang = pts_to_angle(crds[atm_idxs[0]],
                                    crds[atm_idxs[1]],
                                    crds[atm_idxs[2]])
-                z_crds_dict[z_idx].append(
-                    ang.value_in_unit(_ANGLE))
+                if with_units:
+                    z_crd = ang.in_units_of(_ANGLE)
+                else:
+                    z_crd = ang.value_in_unit(_ANGLE)
+                z_crds_dict[z_idx].append(z_crd)
             if z_idx > 2:
                 dih = pts_to_dihedral(crds[atm_idxs[0]],
                                       crds[atm_idxs[1]],
                                       crds[atm_idxs[2]],
                                       crds[atm_idxs[3]])
-                z_crds_dict[z_idx].append(
-                    dih.value_in_unit(_ANGLE))
+                if with_units:
+                    z_crd = dih.in_units_of(_ANGLE)
+                else:
+                    z_crd = dih.value_in_unit(_ANGLE)
+                z_crds_dict[z_idx].append(z_crd)
+            
         return z_crds_dict
