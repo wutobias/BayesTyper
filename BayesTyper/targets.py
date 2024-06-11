@@ -413,13 +413,14 @@ def run_energytarget(
     ### doi.org/10.26434/chemrxiv.13082561.v2
     if reference_to_lowest:
         target_denom = np.ones(N_strcs, dtype=float)
-        delta_target_energies = target_energies - np.min(target_energies)
+        argmin_target_energy  = np.argmin(target_energies)
+        delta_target_energies = np.array(target_energies) - target_energies[argmin_target_energy]
     else:
         target_denom = np.ones((N_strcs, N_strcs), dtype=float)
         _delta_target_energies = np.reshape(target_energies, (N_strcs, 1))
         delta_target_energies  = _delta_target_energies - _delta_target_energies.transpose()
     if ene_weighting:
-        _ene_unit  = (1.*_ENERGY_PER_MOL).value_in_unit(unit.kilocalorie_per_mole)
+        _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
         _lower     = _ene_unit
         _upper     = 5. * _ene_unit
         valids1 = np.where(delta_target_energies < _lower)
@@ -429,8 +430,8 @@ def run_energytarget(
         target_denom[valids2] = np.sqrt(_lower + (target_denom[valids2] - _lower)**2)
         target_denom[valids3] = 0.
 
-    _target_denom = target_denom / np.sum(target_denom, axis=0)
-    target_denom  = _target_denom
+    #_target_denom = target_denom / np.sum(target_denom, axis=0)
+    #target_denom  = _target_denom
 
     ### Important: Add the forces only through the engine.
     ### The original openmm_system object must remain untouched.
@@ -473,7 +474,7 @@ def run_energytarget(
         energy_list[strc_idx] = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
 
     if reference_to_lowest:
-        delta_energies = energy_list - np.min(energy_list)
+        delta_energies = energy_list - energy_list[argmin_target_energy]
     else:
         _delta_energies = np.reshape(energy_list, (N_strcs, 1))
         delta_energies  = _delta_energies - _delta_energies.transpose()
