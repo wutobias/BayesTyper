@@ -1732,7 +1732,7 @@ def retrieve_complete_torsiondataset(
             dataset_dict[smiles][conf_i] = dict()
             worker_dict[smiles][conf_i]  = list()
 
-            qcentry.geometry[:] = offmol.conformers[conf_i].value_in_unit(unit.angstrom)
+            qcentry.geometry[:] = offmol.conformers[conf_i].value_in_unit(_LENGTH_AU)
             qcemol = qcel.models.Molecule.from_data(copy.deepcopy(qcentry).dict())
             for match in torsion_list:
                 inp = {
@@ -1909,7 +1909,7 @@ def retrieve_complete_dataset(
             worker_dict[smiles][conf_i]["hes"] = None
             worker_dict[smiles][conf_i]["frc"] = list()
 
-            qcentry.geometry[:] = offmol.conformers[conf_i].value_in_unit(unit.angstrom)
+            qcentry.geometry[:] = offmol.conformers[conf_i].value_in_unit(_LENGTH_AU)
             qcemol = qcel.models.Molecule.from_data(copy.deepcopy(qcentry).dict())
             inp = {
                 "driver" : "gradient",
@@ -1918,10 +1918,10 @@ def retrieve_complete_dataset(
             opt = {
                 "keywords": {
                     "program"  : program,
-                    "coordsys" : "tric",
+                    "coordsys" : "dlc",
                     "enforce"  : 0.0,
                     "epsilon"  : 1e-05,
-                    "reset"    : False,
+                    "reset"    : True,
                     "qccnv"    : False,
                     "molcnv"   : False,
                     "check"    : 0,
