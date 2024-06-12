@@ -710,7 +710,11 @@ def set_parameters_remote(
             ### `full_reset=False` means we will set only the main
             ### parameter manager to its optimized values and all other
             ### are set to the best value.
-            #for full_reset in [True, False]:
+            ###
+            ### For the validation procedure that sub-samples
+            ### the training set, we *must* use only [True] here.
+            ### Otherwise the majority vote on the validation batches
+            ### will not work properly.
             for full_reset in [True]:
                 for mngr_idx in range(N_mngr):
                     ### For the targeted mngr we just set the
@@ -796,11 +800,11 @@ def set_parameters_remote(
                             type_j, b)
                         found_improvement = True
 
-            for mngr_idx in range(N_mngr):
-                pvec_list_cp[mngr_idx].reset(
-                    pvec_list_initial[mngr_idx])
-                bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                    bitvec_type_list_list_initial[mngr_idx])
+                for mngr_idx in range(N_mngr):
+                    pvec_list_cp[mngr_idx].reset(
+                        pvec_list_initial[mngr_idx])
+                    bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
+                        bitvec_type_list_list_initial[mngr_idx])
         
             del worker_id_dict[worker_id[0]]
 
@@ -1976,8 +1980,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
-                    pvec_idx_min = [mngr_idx_main],
-                    #pvec_idx_min = None,
+                    #pvec_idx_min = [mngr_idx_main],
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list[mngr_idx_main],
@@ -2271,10 +2274,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                                 self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
 
-                        if self.verbose:
-                            print(
-                                f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
-                                f"Found {len(votes_split_list)} candidate split solutions ...\n")
+                            if self.verbose:
+                                print(
+                                    f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
+                                    f"Found {len(votes_split_list)} candidate split solutions ...\n")
                         del split_worker_id_dict[mngr_idx,sys_idx_pair]
 
                     import pickle
@@ -2313,7 +2316,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bitvec_type_list = bitvec_type_list_id,
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,
-                                    pvec_idx_min = [mngr_idx],
+                                    #pvec_idx_min = [mngr_idx],
                                     local_targets = False,
                                     bounds_penalty= self.bounds_penalty_list[mngr_idx],
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
