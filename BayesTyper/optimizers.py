@@ -664,6 +664,10 @@ def set_parameters_remote(
 
         return _AIC_list
 
+    best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
+    best_ast       = None
+    best_bitvec_type_list_list = copy.deepcopy(bitvec_type_list_list_cp)
+
     [best_AIC] = _calculate_AIC(
         pvec_list_cp,
         0,
@@ -676,9 +680,7 @@ def set_parameters_remote(
             "Initial best AIC:", best_AIC)
         print(
             f"Checking {len(worker_id_dict)} solutions...")
-    best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
-    best_ast       = None
-    best_bitvec_type_list_list = bitvec_type_list_list_cp
+
     found_improvement = False
 
     ### For each system, find the best solution
@@ -700,125 +702,81 @@ def set_parameters_remote(
 
             args = worker_id_dict[worker_id[0]]
             ast, _, _, _, _, _, _, _, _, _, _ = args
-            _, _, type_ = ast
+            _, _, (type_i, type_j) = ast
 
-            type_i = type_[0]
-            type_j = type_[1]
-
-            ### `full_reset=True` means we will set all parameter
-            ### managers to their optimized values
-            ### `full_reset=False` means we will set only the main
-            ### parameter manager to its optimized values and all other
-            ### are set to the best value.
-            ###
-            ### For the validation procedure that sub-samples
-            ### the training set, we *must* use only [True] here.
-            ### Otherwise the majority vote on the validation batches
-            ### will not work properly.
-            for full_reset in [True]:
-                for mngr_idx in range(N_mngr):
-                    ### For the targeted mngr we just set the
-                    ### parameter values to the optimized ones.
-                    ### The allocations will be set in the next step
-                    if mngr_idx == mngr_idx_main:
-                        allocations = [0 for _ in pvec_list_cp[mngr_idx_main].allocations]
-                        pvec_list_cp[mngr_idx_main].allocations[:] = allocations
-                        pvec_list_cp[mngr_idx_main].reset(
-                            _pvec_list[mngr_idx_main],
-                            pvec_list_cp[mngr_idx_main].allocations)
-                    else:
-                        ### Set all parameter values to
-                        ### their optimized values.
-                        if full_reset:
-                            allocations = [-1 for _ in pvec_list_cp[mngr_idx].allocations]
-                            bitvec_type_list_list_cp[mngr_idx] = bitvec_type_all_list[mngr_idx]
-                            bitvec_hierarchy_to_allocations(
-                                bitvec_alloc_dict_list[mngr_idx], 
-                                bitvec_type_all_list[mngr_idx],
-                                allocations
-                                )
-                            if allocations.count(-1) == 0:
-                                pvec_list_cp[mngr_idx].allocations[:] = allocations
-                                pvec_list_cp[mngr_idx].reset(
-                                    _pvec_list[mngr_idx],
-                                    pvec_list_cp[mngr_idx].allocations)
-                        ### Set the parameter values to
-                        ### their optimized values only for the 
-                        ### targeted mngr and keep the previous
-                        ### values for the other managers.
-                        else:
-                            bitvec_type_list_list_cp[mngr_idx] = bitvec_type_list_list[mngr_idx]
-                            pvec_list_cp[mngr_idx].reset(
-                                pvec_list[mngr_idx],
-                                pvec_list[mngr_idx].allocations
-                                )
-                    pvec_list_cp[mngr_idx].apply_changes()
-
-                bitvec_list = list()
-                alloc_list  = list()
-                for b in bitvec_dict[ast]:
-                    bitvec_type_list_list_cp[mngr_idx_main].insert(
-                        type_j, b
-                        )
-
-                    allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
+            for mngr_idx in range(N_mngr):
+                if mngr_idx == mngr_idx_main:
+                    allocations = [0 for _ in pvec_list_cp[mngr_idx_main].allocations]
+                    pvec_list_cp[mngr_idx_main].allocations[:] = allocations
+                    pvec_list_cp[mngr_idx_main].reset(
+                        _pvec_list[mngr_idx_main],
+                        pvec_list_cp[mngr_idx_main].allocations)
+                else:
+                    allocations = [-1 for _ in pvec_list_cp[mngr_idx].allocations]
+                    bitvec_type_list_list_cp[mngr_idx] = bitvec_type_all_list[mngr_idx]
                     bitvec_hierarchy_to_allocations(
-                        bitvec_alloc_dict_list[mngr_idx_main], 
-                        bitvec_type_list_list_cp[mngr_idx_main],
-                        allocations
-                        )
-                    N_types = pvec_list_cp[mngr_idx_main].force_group_count
-                    if allocations.count(-1) == 0 and max(allocations) < N_types:
-                        allocs = tuple(allocations)
-                        if allocs not in alloc_list:
-                            alloc_list.append(
-                                allocs
-                                )
-                            bitvec_list.append(b)
-                    bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
+                        bitvec_alloc_dict_list[mngr_idx],
+                        bitvec_type_all_list[mngr_idx],
+                        allocations)
+                    if allocations.count(-1) == 0:
+                        pvec_list_cp[mngr_idx].allocations[:] = allocations
+                        pvec_list_cp[mngr_idx].reset(
+                            _pvec_list[mngr_idx],
+                            pvec_list_cp[mngr_idx].allocations)
 
-                AIC_list = _calculate_AIC(
-                    pvec_list_cp,
-                    mngr_idx_main,
-                    alloc_list,
-                    targetcomputer
+            bitvec_list = list()
+            alloc_list  = list()
+            for b in bitvec_dict[ast]:
+                bitvec_type_list_list_cp[mngr_idx_main].insert(
+                    type_j, b
                     )
-                for idx, b in enumerate(bitvec_list):
-                    new_AIC = AIC_list[idx]
-                    accept = False
-                    if new_AIC < best_AIC:
-                        accept = True
-                    if accept:
-                        pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
-                        pvec_list_cp[mngr_idx_main].apply_changes()
-                        best_AIC       = new_AIC
-                        best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
-                        best_ast       = ast
-                        
-                        best_bitvec_type_list_list = copy.deepcopy(bitvec_type_list_list_cp)
-                        best_bitvec_type_list_list[mngr_idx_main].insert(
-                            type_j, b)
-                        found_improvement = True
 
-                for mngr_idx in range(N_mngr):
-                    pvec_list_cp[mngr_idx].reset(
-                        pvec_list_initial[mngr_idx])
-                    bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                        bitvec_type_list_list_initial[mngr_idx])
+                allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
+                bitvec_hierarchy_to_allocations(
+                    bitvec_alloc_dict_list[mngr_idx_main], 
+                    bitvec_type_list_list_cp[mngr_idx_main],
+                    allocations
+                    )
+                N_types = pvec_list_cp[mngr_idx_main].force_group_count
+                if allocations.count(-1) == 0 and max(allocations) < N_types:
+                    allocs = tuple(allocations)
+                    if allocs not in alloc_list:
+                        alloc_list.append(
+                            allocs
+                            )
+                        bitvec_list.append(b)
+                bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
+
+            AIC_list = _calculate_AIC(
+                pvec_list_cp,
+                mngr_idx_main,
+                alloc_list,
+                targetcomputer
+                )
+            for idx, b in enumerate(bitvec_list):
+                new_AIC = AIC_list[idx]
+                accept  = new_AIC < best_AIC
+                if accept:
+                    pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
+                    pvec_list_cp[mngr_idx_main].apply_changes()
+                    best_AIC       = new_AIC
+                    best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
+                    best_ast       = ast
+
+                    best_bitvec_type_list_list = copy.deepcopy(
+                            bitvec_type_list_list_cp)
+                    best_bitvec_type_list_list[mngr_idx_main].insert(
+                        type_j, b)
+
+                    found_improvement = True
+
+            for mngr_idx in range(N_mngr):
+                pvec_list_cp[mngr_idx].reset(
+                    pvec_list_initial[mngr_idx])
+                bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
+                    bitvec_type_list_list_initial[mngr_idx])
         
-            del worker_id_dict[worker_id[0]]
-
-    if found_improvement:
-        for mngr_idx in range(N_mngr):
-            pvec_list_cp[mngr_idx].reset(
-                best_pvec_list[mngr_idx])
-            bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                best_bitvec_type_list_list[mngr_idx])
-
-    for pvec in pvec_list_cp:
-        del pvec.parameter_manager.system_list
-
-    return found_improvement, pvec_list_cp, bitvec_type_list_list_cp, best_AIC, best_ast
+    return found_improvement, best_pvec_list, best_bitvec_type_list_list, best_AIC, best_ast
 
 
 class BaseOptimizer(object):
@@ -2483,7 +2441,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             vec   = pvec_list[mngr_idx].vector_k[start:stop]
                             vec_str = ",".join([str(v) for v in vec])
                             print(
-                                f"{idx} {pvec_list[mngr_idx].force_group_histogram[idx]}: {vec_str} {sma}")
+                                f"{idx} : {vec_str} {sma}")
 
                 self.split_iteration_idx += 1
 
