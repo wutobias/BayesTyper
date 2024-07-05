@@ -188,10 +188,12 @@ def build_z_crds(z, crds):
 
 
 def run_normalmodetarget(
-    openmm_system, target_strcs, target_freqs, minimize, masses, denom_frq,
-    return_results_dict=False):
+    openmm_system, target_strcs, target_freqs, target_modes, minimize, masses, denom_frq,
+    return_results_dict=False, permute=False):
 
     import copy
+    if permute:
+        from scipy import optimize
 
     diff_dict = OrderedDict()
     rss_dict  = OrderedDict()
@@ -218,8 +220,18 @@ def run_normalmodetarget(
             N_success += 1
             hessian  = engine.compute_hessian()
             ### Remove 1/mol
-            hessian /= unit.constants.AVOGADRO_CONSTANT_NA
-            freqs    = compute_freqs(hessian, masses*_ATOMIC_MASS).value_in_unit(_WAVENUMBER)
+            hessian      /= unit.constants.AVOGADRO_CONSTANT_NA
+            freqs, modes = compute_freqs(hessian, masses*_ATOMIC_MASS)
+            freqs        = freqs.value_in_unit(_WAVENUMBER)
+            ### re-assign frequencies by computing optimal overlap
+            ### between modes
+            _diff    = abs(freqs - target_freqs[strc_idx])
+            _rss     = _diff**2 * (1./denom_frq)**2
+            if permute:
+                overlap = np.einsum('ij,ik', target_modes[strc_idx], modes)
+                row_ind, col_ind = optimize.linear_sum_assignment(1.-overlap)
+                modes = modes[col_ind]
+                freqs = freqs[col_ind]
 
             _diff    = abs(freqs - target_freqs[strc_idx])
             _rss     = _diff**2 * (1./denom_frq)**2
@@ -853,6 +865,7 @@ def compute_freqs(hessian, masses):
             )[n_remove:]
         )
     freqs = freqs[larger_freq_idxs]
+    eigvecs = eigvecs[:,larger_freq_idxs]
     ### Convert 1/s * 10.e-12 to 1/cm
     ### >>> a = 1. * unit.seconds**-1
     ### >>> a = a * unit.constants.SPEED_OF_LIGHT_C**-1
@@ -864,7 +877,7 @@ def compute_freqs(hessian, masses):
 
     del invert_sqrt_mass, mass_weighted_hessian
 
-    return freqs.in_units_of(_WAVENUMBER)
+    return freqs.in_units_of(_WAVENUMBER), eigvecs
 
 
 class Target(object):
@@ -1141,22 +1154,27 @@ class NormalModeTarget(Target):
         else:
             self.N_freqs = self.N_atoms * 3 - 6
         self.target_freqs = list()
+        self.target_modes = list()
 
         ### 2) Compute vib frequencies
         ### ==========================
         for hes_idx in range(self.N_strcs):
-            freqs = compute_freqs(
+            freqs, modes = compute_freqs(
                 self.target_hessian[hes_idx] *_FORCE/_LENGTH*unit.mole,
                 self.masses * _ATOMIC_MASS)
             self.target_freqs.append(
                 freqs.value_in_unit(_WAVENUMBER))
+            self.target_modes.append(
+                modes)
         self.target_freqs = np.array(self.target_freqs)
+        self.target_modes = np.array(self.target_modes)
 
     def get_args(self):
 
         args = {
             "target_strcs"    : self.target_strcs,
             "target_freqs"    : self.target_freqs,
+            "target_modes"    : self.target_modes,
             "minimize"        : self.minimize,
             "masses"          : self.masses,
             "denom_frq"       : self.denom_frq}
