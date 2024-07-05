@@ -141,11 +141,13 @@ class System(object):
 
         self.openmm_system = self.openmm_system_init
 
+        import copy
+        _rdmol = copy.deepcopy(self.offmol.to_rdkit())
         self.rdmol = self.offmol.to_rdkit()
         Chem.SanitizeMol(self.rdmol)
         self.ranks = list(
             Chem.CanonicalRankAtoms(
-                self.rdmol, breakTies=False
+                _rdmol, breakTies=False
                 )
             )
 
@@ -384,12 +386,16 @@ class SystemManager(object):
 
         from rdkit import Chem
 
+        if use_stereochemistry:
+            raise ValueError(
+                f"Currently `use_stereochemistry` must be set to `False`")
+
         self._system_list.append(new_system)
         value = new_system.rdmol_setatommap
         new_system.rdmol_setatommap = False
         self._rdmol_list.append(
             Chem.MolToSmiles(
-                new_system.rdmol,
+                new_system.offmol.to_rdkit(),
                 isomericSmiles=use_stereochemistry
                 )
             )
@@ -449,7 +455,7 @@ def from_qcschema(qcschema,
                   name="mol",
                   FF_name=_DEFAULT_FF):
 
-    offmol   = Molecule.from_qcschema(qcschema)
+    offmol = Molecule.from_qcschema(qcschema)
     return from_offmol(offmol, name, FF_name)
 
 
@@ -479,6 +485,3 @@ def from_offmol(offmol,
         openmm_system = ff.create_openmm_system(top)
 
     return System(name, offmol, openmm_system, top)
-
-
-

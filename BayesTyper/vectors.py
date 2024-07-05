@@ -856,7 +856,7 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         ### a parameter vector might have no parameter_manager.
         ### In that case, we can still use `self.reset`, but it is
         ### less safe.
-        try:
+        if hasattr(parameters, "parameter_manager"):
             ### Check if we must create new force groups first
             diff = parameters.force_group_count - self.force_group_count
             if diff > 0:
@@ -874,15 +874,22 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
                     ### Note: `self.duplicate(0)` only works if there
                     ### is already a force group present.
                     ### Therefore we must use `self.add_force_group`.
-        except:
-            import warnings
-            warnings.warn(
-                "Attempting to reset parameter vector without parameter manager."
-                )
+        elif hasattr(parameters, "vector_k"):
             ### Check if we must create new force groups first
-            diff = int(len(parameters.vector_k)/parameters.parameters_per_force_group) - self.force_group_count
+            diff = int(len(parameters.vector_k)/self.parameters_per_force_group) - self.force_group_count
             if diff > 0:
-                value_list = parameters.vector_k[:parameters.parameters_per_force_group]
+                value_list = parameters.vector_k[:self.parameters_per_force_group]
+                for _ in range(diff):
+                    ### This will update vector_k
+                    self.add_force_group(value_list)
+                    ### Note: `self.duplicate(0)` only works if there
+                    ### is already a force group present.
+        else:
+            ### Here, we assume that parameters is just a bunch of numbers with units
+            ### Check if we must create new force groups first
+            diff = int(len(parameters)/self.parameters_per_force_group) - self.force_group_count
+            if diff > 0:
+                value_list = parameters[:self.parameters_per_force_group]
                 for _ in range(diff):
                     ### This will update vector_k
                     self.add_force_group(value_list)
@@ -911,18 +918,24 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         for force_group_idx in range(self.force_group_count):
             for parameter_name in self.parameter_name_list:
                 ### This will update vector_k
-                self._vector_0[vector_idx] = copy.deepcopy(
-                    parameters._vector_0[vector_idx]
-                    )
-                self._vector_k_vec[vector_idx] = copy.deepcopy(
-                    parameters._vector_k_vec[vector_idx]
-                    )
-                self._scaling_vector[vector_idx] = copy.deepcopy(
-                    parameters._scaling_vector[vector_idx]
-                    )
-                self[vector_idx] = copy.deepcopy(
-                    parameters._vector_values[vector_idx]
-                    )
+                if hasattr(parameters, "_vector_0"):
+                    self._vector_0[vector_idx] = copy.deepcopy(
+                        parameters._vector_0[vector_idx])
+                    self._vector_k_vec[vector_idx] = copy.deepcopy(
+                        parameters._vector_k_vec[vector_idx])
+                    self._scaling_vector[vector_idx] = copy.deepcopy(
+                        parameters._scaling_vector[vector_idx])
+                    self[vector_idx] = copy.deepcopy(
+                        parameters._vector_values[vector_idx])
+                else:
+                    value  = parameters[vector_idx].value_in_unit(
+                        self._vector_units[vector_idx])
+                    self._vector_k_vec[vector_idx] = copy.deepcopy(
+                        value)
+                    m  = value - self._vector_0[vector_idx]
+                    m /= self._scaling_vector[vector_idx]
+                    self[vector_idx] = m
+
                 vector_idx += 1
 
         self.apply_changes()
