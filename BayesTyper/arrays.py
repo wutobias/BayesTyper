@@ -2,6 +2,9 @@
 besmarts.core.arrays
 
 The core data types that store SMARTS primitives.
+
+NOTE: This module is copied from the Besmarts package, developed by Trevor Gokey, UC Irvine.
+https://github.com/trevorgokey/besmarts
 """
 
 from typing import List, Tuple
