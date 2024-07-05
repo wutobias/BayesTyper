@@ -36,11 +36,11 @@ except:
 
 from .constants import (_FORCE_AU,
                         _ENERGY_AU,
-                        _LENGTH_AU)
-from .constants import (_LENGTH,
-                        _ANGLE)
-
-from .constants import _UNIT_QUANTITY
+                        _LENGTH_AU,
+                        _LENGTH,
+                        _ANGLE,
+                        _UNIT_QUANTITY,
+                        _DEFAULT_FF)
 
 # ==============================================================================
 # PRIVATE SUBROUTINES
@@ -318,8 +318,8 @@ def get_plots(
                 engine.set_xyz(xyz)
                 engine.minimize()
                 hessian_mm = engine.compute_hessian() / unit.constants.AVOGADRO_CONSTANT_NA
-                freqs_mm = compute_freqs(hessian_mm, masses)
-                freqs_qm = compute_freqs(hessian_qm, masses)
+                freqs_mm, modes_mm = compute_freqs(hessian_mm, masses)
+                freqs_qm, modes_qm = compute_freqs(hessian_qm, masses)
                 freqs_mm_list.extend(freqs_mm._value)
                 freqs_qm_list.extend(freqs_qm._value)
                 
@@ -868,11 +868,216 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
 
 
 @ray.remote
-def parameterize_system(_qcentry, _smiles, _forcefield_name):
+def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list):
     from . import system
-    sys = system.from_qcschema(
-        _qcentry, _smiles, _forcefield_name)
-    return sys
+    system_list = [system.from_qcschema(
+        _qcentry, _smiles, _forcefield_name)]
+    remove_types(
+        system_list,
+        remove_types_manager_list)
+    return system_list[0]
+
+
+@ray.remote
+def generate_rdmol_dict(smiles_list, optdataset_dict):
+
+    from openff.toolkit.topology import Molecule
+    from rdkit import Chem
+
+    rdmol_dict = dict()
+    for smiles in smiles_list:
+        key = list(
+            optdataset_dict[smiles].keys())[0]
+        offmol = Molecule.from_qcschema(
+            optdataset_dict[smiles][key]["qcentry"])
+        rdmol  = offmol.to_rdkit()
+        smi    = Chem.MolToSmiles(
+                rdmol,
+                isomericSmiles=False)
+        rdmol_dict[smiles] = rdmol, smi
+
+    return rdmol_dict
+
+
+class SystemManagerLoader(object):
+
+    def __init__(
+        self,
+        error_scale_geo = 1.0,
+        error_scale_vib = 1.0,
+        error_scale_offeq = 1.0,
+        error_scale_torsion = 1.0,
+        error_scale_force = 1.0,
+        optdataset_dict = None, 
+        torsiondataset_dict = None,
+        forcefield_name =_DEFAULT_FF,
+        ene_weighting = True,
+        use_geo = True,
+        use_vib = True,
+        use_offeq = True,
+        use_torsion = True,
+        use_force = False,
+        add_units = False,
+        force_projection = False,
+        reference_to_lowest = True,
+        remove_types_manager_list = list(),
+        verbose = False,
+        ):
+
+        self._query_smiles_list  = list(optdataset_dict.keys())
+        self._query_smiles_list  = list(set(self._query_smiles_list))
+        self.error_scale_geo     = error_scale_geo
+        self.error_scale_vib     = error_scale_vib
+        self.error_scale_offeq   = error_scale_offeq
+        self.error_scale_torsion = error_scale_torsion
+        self.error_scale_force   = error_scale_force
+        self.optdataset_dict     = optdataset_dict
+        self.torsiondataset_dict = torsiondataset_dict
+        self.forcefield_name     = forcefield_name
+        self.ene_weighting       = ene_weighting
+        self.use_geo             = use_geo
+        self.use_vib             = use_vib
+        self.use_offeq           = use_offeq
+        self.use_torsion         = use_torsion
+        self.use_force           = use_force
+        self.add_units           = add_units
+        self.force_projection    = force_projection
+        self.reference_to_lowest = reference_to_lowest
+        self.verbose             = verbose
+
+        import copy
+        self._remove_types_manager_list = copy.deepcopy(remove_types_manager_list)
+
+        self.system_cache_dict   = dict()
+
+        self._generate_rdmol_dict()
+
+
+    def add_parameter_manager(self, parameter_manager):
+
+        import copy
+        self._remove_types_manager_list.append(
+            copy.deepcopy(parameter_manager))
+        self.clear_cache()
+
+    def clear_cache(self):
+
+        self.system_cache_dict.clear()
+
+    def _check_smiles_list(self, query_smiles_list):
+
+        if isinstance(query_smiles_list, type(None)):
+            return self._query_smiles_list
+        
+        _smiles_list = list()
+        for smi in query_smiles_list:
+            if isinstance(smi, str):
+                if smi not in self.smiles_list:
+                    raise ValueError(
+                        f"{smi} not in internal smiles list")
+                _smiles_list.extend(
+                    self.rdmol_to_smiles_map_dict[smi])
+            elif isinstance(smi, int):
+                if smi > (len(self.smiles_list)-1):
+                    raise ValueError(
+                        f"{smi} not in internal smiles list")
+                _smiles_list.extend(
+                    self.rdmol_to_smiles_map_dict[
+                        self.smiles_list[smi]])
+            else:
+                raise ValueError(
+                    f"{smi} not understood")
+
+        return _smiles_list
+
+
+    def _generate_rdmol_dict(self):
+
+        import ray
+        from openff.toolkit.topology import Molecule
+        from rdkit import Chem
+
+        CHUNK_SIZE = 100
+        smi_worker_list = list()
+        worker_id_list = list()
+        for smi in self._query_smiles_list:
+            if len(smi_worker_list) < CHUNK_SIZE:
+                smi_worker_list.append(smi)
+            else:
+                worker_id = generate_rdmol_dict.remote(
+                        smi_worker_list, self.optdataset_dict)
+                worker_id_list.append(worker_id)
+                smi_worker_list = list()
+        if smi_worker_list:
+            worker_id = generate_rdmol_dict.remote(
+                    smi_worker_list, self.optdataset_dict)
+            worker_id_list.append(worker_id)
+            smi_worker_list = list()
+
+        self.rdmol_dict = dict()
+        self.rdmol_to_smiles_map_dict = dict()
+        self.smiles_list = list()
+        while worker_id_list:
+            [worker_id], worker_id_list = ray.wait(worker_id_list)
+            _rdmol_dict = ray.get(worker_id)
+            for smiles in _rdmol_dict:
+                ### smiles : initial smiles
+                ### smi    : canonical and not isomeric smiles
+                rdmol, smi = _rdmol_dict[smiles]
+                self.rdmol_dict[smi] = rdmol
+                if smi in self.rdmol_to_smiles_map_dict:
+                    self.rdmol_to_smiles_map_dict[smi].append(smiles)
+                else:
+                    self.rdmol_to_smiles_map_dict[smi] = [smiles]
+        self.smiles_list = list(self.rdmol_dict.keys())
+
+
+    def generate_systemmanager(self, smiles_list=None):
+
+        import copy
+
+        _smiles_list = list()
+        for smi in smiles_list:
+            if not smi in self.system_cache_dict:
+                _smiles_list.append(smi)
+        _smiles_query_list = self._check_smiles_list(_smiles_list)
+
+        system_manager, _ = generate_systemmanager(
+            _smiles_query_list,
+            None,
+            self.error_scale_geo,
+            self.error_scale_vib,
+            self.error_scale_offeq,
+            self.error_scale_torsion,
+            self.error_scale_force,
+            self.optdataset_dict,
+            self.torsiondataset_dict,
+            self.forcefield_name,
+            self.ene_weighting,
+            self.use_geo,
+            self.use_vib,
+            self.use_offeq,
+            self.use_torsion,
+            self.use_force,
+            self.add_units,
+            self.force_projection,
+            self.reference_to_lowest,
+            self._remove_types_manager_list,
+            self.verbose)
+
+        for smi in smiles_list:
+            if smi in system_manager._rdmol_list:
+                sys_idx = system_manager._rdmol_list.index(smi)
+                sys     = system_manager._system_list[sys_idx]
+                self.system_cache_dict[smi] = copy.deepcopy(sys)
+            else:
+                if self.verbose:
+                    print(
+                        f"Adding cached {smi}")
+                system_manager.add_system(
+                    copy.deepcopy(self.system_cache_dict[smi]))
+
+        return system_manager
 
 
 def generate_systemmanager(
@@ -885,7 +1090,7 @@ def generate_systemmanager(
     error_scale_force=1.0,
     optdataset_dict=None, 
     torsiondataset_dict=None,
-    forcefield_name="openff_unconstrained-1.3.0.offxml",
+    forcefield_name=_DEFAULT_FF,
     ene_weighting = True,
     use_geo = True,
     use_vib = True,
@@ -895,6 +1100,7 @@ def generate_systemmanager(
     add_units=False,
     force_projection=False,
     reference_to_lowest=True,
+    remove_types_manager_list=list(),
     verbose=False):
 
     __doc__ = """
@@ -982,6 +1188,7 @@ def generate_systemmanager(
         TO_HESSIAN_UNIT = lambda x: x
 
     worker_id_dict = dict()
+    remove_types_manager_list_id = ray.put(remove_types_manager_list)
     for smiles in smiles_list:
         if use_geo or use_offeq or use_force or use_vib:
             key = list(
@@ -989,7 +1196,7 @@ def generate_systemmanager(
             )[0]
             if "qcentry" in optdataset_dict[smiles][key]:
                 worker_id = parameterize_system.remote(
-                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name)
+                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
@@ -1002,7 +1209,7 @@ def generate_systemmanager(
             )[0]
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
                 worker_id = parameterize_system.remote(
-                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name)
+                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
@@ -1028,7 +1235,7 @@ def generate_systemmanager(
             continue
 
         smi = Chem.MolToSmiles(
-            sys.rdmol,
+            sys.offmol.to_rdkit(),
             isomericSmiles=False,
             )
         sys_target = sys
@@ -1117,7 +1324,8 @@ def generate_systemmanager(
             if len(final_geo_list) > 0 and len(hessian_list) > 0:
                 target_dict_nm = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
                                    "rdmol"        : sys_target.rdmol,
-                                   "minimize"     : True, 
+                                   #"minimize"     : True, 
+                                   "minimize"     : False, 
                                    "H_constraint" : False,
                                    "hessian"      : [TO_HESSIAN_UNIT(_h) for _h in hessian_list],
                                    "denom_freq"   : 200. * _WAVENUMBER * error_scale_vib, 
@@ -2066,7 +2274,7 @@ def retrieve_complete_dataset(
                         ### unit is nm
                         if generate_forces_bonds:
                             ### Unit is nm
-                            z_crd[0] += np.random.normal(0, 1.0e-2) * _LENGTH
+                            z_crd[0] += np.random.normal(0, 2.0e-3) * _LENGTH
                         if len(z_crd) > 1 and generate_forces_angles:
                             ### Unit is deg
                             z_crd[1] += np.random.normal(0, 2.0e+0) * _ANGLE
@@ -2577,7 +2785,7 @@ def retrieve_optimization_dataset(
 
                         if generate_forces_bonds:
                             ### Unit is nm
-                            z_crd[0] += np.random.normal(0, 1.0e-2) * _LENGTH
+                            z_crd[0] += np.random.normal(0, 2.0e-3) * _LENGTH
                         if len(z_crd) > 1 and generate_forces_angles:
                             ### Unit is deg
                             z_crd[1] += np.random.normal(0, 2.0e+0) * _ANGLE
