@@ -139,6 +139,7 @@ class AngleBitvectorContainer(BaseBitvectorContainer):
 
                             counts += 1
 
+
 class ProperTorsionBitvectorContainer(BaseBitvectorContainer):
 
     def __init__(self):
@@ -453,6 +454,8 @@ def sanitize_atom_smarts(sma):
         sma = sma.replace("&:", "")
     if "&!:" in sma:
         sma = sma.replace("&!:", "")
+    if sma.startswith("[:"):
+        sma = sma.replace("[:", "[*:")
         
     while sma.startswith("[&"):
         sma = "[" + sma[2:]
