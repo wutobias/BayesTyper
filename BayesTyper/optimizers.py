@@ -962,7 +962,10 @@ class BaseOptimizer(object):
                     bitvec_list.append(b)
                     self.best_bitvec_type_list[-1].append(b)
                     if self.verbose:
-                        sma = _bsm.bitvector_to_smarts(b)
+                        try:
+                            sma = _bsm.bitvector_to_smarts(b)
+                        except:
+                            sma = "???"
                         print(
                             f"Adding initial type {sma}")
 
@@ -1555,7 +1558,6 @@ class BaseOptimizer(object):
                 bitvec_type_list.pop(type_j)
 
                 if check:
-                    #print(bsm.bitvector_to_smarts(b_new))
                     key   = tuple(allocations), tuple(selection_i), tuple([type_i, type_j])
                     if key in alloc_bitvec_degeneracy_dict:
                         alloc_bitvec_degeneracy_dict[key].append(b_new)
@@ -1839,7 +1841,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                     bsm, _ = self.generate_bitsmartsmanager(mngr_idx)
                     for idx, b in enumerate(bitvec_type_list):
-                        sma = bsm.bitvector_to_smarts(b)
+                        try:
+                            sma = bsm.bitvector_to_smarts(b)
+                        except:
+                            sma = "???"
                         print(
                             f"Type {idx} ({pvec.force_group_histogram[idx]}): {sma}"
                             )
