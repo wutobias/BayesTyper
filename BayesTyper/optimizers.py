@@ -851,8 +851,10 @@ class BaseOptimizer(object):
 
     def _set_system_list(self, smiles_list):
 
+        import warnings
+
         if len(self.system_manager_loader.smiles_list) == 0:
-            self.system_manager_loader.generate_rdmol_dict()
+            self.system_manager_loader._generate_rdmol_dict()
 
         _smiles_list = list(set(smiles_list))
 
@@ -864,10 +866,14 @@ class BaseOptimizer(object):
         system_manager = self.system_manager_loader.generate_systemmanager(_smiles_list)
 
         for smi in smiles_list:
-            sys_idx = system_manager._rdmol_list.index(smi)
-            self.system_list.append(
-                    system_manager._system_list[sys_idx])
-            self.system_name_list.append(smi)
+            if smi in system_manager._rdmol_list:
+                sys_idx = system_manager._rdmol_list.index(smi)
+                self.system_list.append(
+                        system_manager._system_list[sys_idx])
+                self.system_name_list.append(smi)
+            else:
+                warnings.warn(
+                        f"Could not load system {smi}")
 
 
     def set_targetcomputer(self, system_idx_list):
@@ -905,7 +911,7 @@ class BaseOptimizer(object):
         self.system_manager_loader.add_parameter_manager(
             parameter_manager)
         self._set_system_list(
-            self.smiles_list[:1])
+            self.smiles_list[:5])
 
         self.parameter_manager_list.append(parameter_manager)
         parm_mngr = self.generate_parameter_manager(self.N_mngr)
@@ -1336,14 +1342,14 @@ class BaseOptimizer(object):
     @property
     def rdmol_dict(self):
         if len(self.system_manager_loader.rdmol_dict) == 0:
-            self.system_manager_loader.generate_rdmol_dict()
+            self.system_manager_loader._generate_rdmol_dict()
         return self.system_manager_loader.rdmol_dict
 
 
     @property
     def smiles_list(self):
         if len(self.system_manager_loader.smiles_list) == 0:
-            self.system_manager_loader.generate_rdmol_dict()
+            self.system_manager_loader._generate_rdmol_dict()
         return self.system_manager_loader.smiles_list
 
 
@@ -1385,7 +1391,7 @@ class BaseOptimizer(object):
 
         if cluster_systems:
             centroid, label = cluster.vq.kmeans2(
-                    self.obs, N_sys_per_batch, iter=100)
+                    self.obs, N_sys_per_batch, minit='points', iter=100)
             label_re = [list() for _ in range(N_sys_per_batch)]
             for i in range(self.N_all_systems):
                 k = label[i]
@@ -1429,7 +1435,7 @@ class BaseOptimizer(object):
                     self.smiles_list[sys_idx])
         smiles_list = list(set(smiles_list))
         ### We need this `self._generator_smiles_list` in order
-        ### restart the optimization run
+        ### to restart the optimization run
         self._generator_smiles_list = smiles_list
         self._set_system_list(smiles_list)
         ### Re-order and re-index 
@@ -2092,7 +2098,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         import pickle
          
         self._set_system_list(
-            self.smiles_list[:1])
+            self.smiles_list[:5])
         pvec_list, bitvec_type_list = self.generate_parameter_vectors()
         for mngr_idx in range(self.N_mngr):
             self.update_best(

@@ -888,8 +888,14 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
     for smiles in smiles_list:
         key = list(
             optdataset_dict[smiles].keys())[0]
+        if "qcentry" in optdataset_dict[smiles]:
+            qcentry = optdataset_dict[smiles]["qcentry"]
+        elif "qcentry" in optdataset_dict[smiles][key]:
+            qcentry = optdataset_dict[smiles][key]["qcentry"]
+        else:
+            continue
         offmol = Molecule.from_qcschema(
-            optdataset_dict[smiles][key]["qcentry"])
+            qcentry, allow_undefined_stereo=True)
         rdmol  = offmol.to_rdkit()
         smi    = Chem.MolToSmiles(
                 rdmol,
@@ -997,20 +1003,21 @@ class SystemManagerLoader(object):
         from openff.toolkit.topology import Molecule
         from rdkit import Chem
 
-        CHUNK_SIZE = 100
+        CHUNK_SIZE = 1000
         smi_worker_list = list()
         worker_id_list = list()
+        optdataset_dict_id = ray.put(self.optdataset_dict)
         for smi in self._query_smiles_list:
             if len(smi_worker_list) < CHUNK_SIZE:
                 smi_worker_list.append(smi)
             else:
                 worker_id = generate_rdmol_dict.remote(
-                        smi_worker_list, self.optdataset_dict)
+                        smi_worker_list, optdataset_dict_id)
                 worker_id_list.append(worker_id)
                 smi_worker_list = list()
         if smi_worker_list:
             worker_id = generate_rdmol_dict.remote(
-                    smi_worker_list, self.optdataset_dict)
+                    smi_worker_list, optdataset_dict_id)
             worker_id_list.append(worker_id)
             smi_worker_list = list()
 
@@ -1030,11 +1037,13 @@ class SystemManagerLoader(object):
                 else:
                     self.rdmol_to_smiles_map_dict[smi] = [smiles]
         self.smiles_list = list(self.rdmol_dict.keys())
+        del optdataset_dict_id
 
 
     def generate_systemmanager(self, smiles_list=None):
 
         import copy
+        import warnings
 
         _smiles_list = list()
         for smi in smiles_list:
@@ -1063,19 +1072,24 @@ class SystemManagerLoader(object):
             self.force_projection,
             self.reference_to_lowest,
             self._remove_types_manager_list,
-            self.verbose)
+            verbose=False)
 
         for smi in smiles_list:
             if smi in system_manager._rdmol_list:
+                print(
+                    f"Adding {smi}")
                 sys_idx = system_manager._rdmol_list.index(smi)
                 sys     = system_manager._system_list[sys_idx]
                 self.system_cache_dict[smi] = copy.deepcopy(sys)
-            else:
+            elif smi in self.system_cache_dict:
                 if self.verbose:
                     print(
                         f"Adding cached {smi}")
                 system_manager.add_system(
                     copy.deepcopy(self.system_cache_dict[smi]))
+            else:
+                warnings.warn(
+                        f"Could not add {smi}")
 
         return system_manager
 
@@ -1132,6 +1146,11 @@ def generate_systemmanager(
         ]
 
     """
+
+    if use_torsion and isinstance(torsiondataset_dict, type(None)):
+        import warnings
+        warnings.warn("Did not provide torsion dataset. Setting `use_torsion=False`")
+        use_torsion = False
 
     import ray
     from . import system

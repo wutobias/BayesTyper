@@ -451,11 +451,13 @@ def write_system(
 
     writer_dict[file_format]()
 
+
 def from_qcschema(qcschema,
                   name="mol",
                   FF_name=_DEFAULT_FF):
 
-    offmol = Molecule.from_qcschema(qcschema)
+    offmol = Molecule.from_qcschema(
+        qcschema, allow_undefined_stereo=True)
     return from_offmol(offmol, name, FF_name)
 
 
@@ -463,7 +465,7 @@ def from_offmol(offmol,
                 name="mol",
                 FF_name=_DEFAULT_FF):
 
-    offmol = copy.copy(offmol)
+    offmol = copy.deepcopy(offmol)
     top    = offmol.to_topology()
 
     if FF_name.startswith("gaff"):
