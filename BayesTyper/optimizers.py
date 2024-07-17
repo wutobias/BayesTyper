@@ -1719,6 +1719,8 @@ class ForceFieldOptimizer(BaseOptimizer):
             print(
                 "Garbage Collection: Looking for bad performing types.")
 
+        # N_sys_per_batch ---> N_systems_validation
+        # N_batches       ---> N_iter_validation
         sys_idx_list_validation = self.get_random_system_idx_list(
                 N_systems_validation, N_iter_validation, cluster_systems)
         self.set_targetcomputer(sys_idx_list_validation)
@@ -2178,6 +2180,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     if isinstance(system_idx_dict_batch, dict):
                         self.system_idx_list_batch = system_idx_dict_batch[iteration_idx]
                     else:
+                        # N_sys_per_batch ---> N_systems_validation
+                        # N_batches       ---> N_iter_validation
                         self.system_idx_list_batch = self.get_random_system_idx_list(
                             N_sys_per_batch_split, N_batches, cluster_systems)
                 else:
@@ -2296,6 +2300,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
                                     f"Found {len(votes_split_list)} candidate split solutions ...\n")
                             
+                    # N_sys_per_batch ---> N_systems_validation
+                    # N_batches       ---> N_iter_validation
                     self.sys_idx_list_validation = self.get_random_system_idx_list(
                             N_systems_validation, N_iter_validation, cluster_systems)
                     self.set_targetcomputer(self.sys_idx_list_validation)
