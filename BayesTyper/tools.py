@@ -980,13 +980,13 @@ class SystemManagerLoader(object):
             if isinstance(smi, str):
                 if smi not in self.smiles_list:
                     raise ValueError(
-                        f"{smi} not in internal smiles list")
+                            f"{smi} not in internal smiles list: {self.smiles_list}")
                 _smiles_list.extend(
                     self.rdmol_to_smiles_map_dict[smi])
             elif isinstance(smi, int):
                 if smi > (len(self.smiles_list)-1):
                     raise ValueError(
-                        f"{smi} not in internal smiles list")
+                        f"{smi} not in internal smiles list of length {len(self.smiles_list)}")
                 _smiles_list.extend(
                     self.rdmol_to_smiles_map_dict[
                         self.smiles_list[smi]])
