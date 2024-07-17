@@ -856,7 +856,22 @@ class BaseOptimizer(object):
         if len(self.system_manager_loader.smiles_list) == 0:
             self.system_manager_loader._generate_rdmol_dict()
 
-        _smiles_list = list(set(smiles_list))
+        ### First check if we have to flatten the list
+        import copy
+        isflat = False
+        _smiles_list_new = copy.deepcopy(smiles_list)
+        while not isflat:
+            isflat = True
+            _smiles_list = list()
+            for smi in _smiles_list_new:
+                if isinstance(smi, (list, tuple, set)):
+                    _smiles_list.extend(
+                        list(smi))
+                    isflat = False
+                else:
+                    _smiles_list.append(smi)
+            _smiles_list_new = copy.deepcopy(_smiles_list)
+        _smiles_list = list(set(_smiles_list_new))
 
         self.clear_cache()
         del self.system_list[:]
@@ -1387,6 +1402,7 @@ class BaseOptimizer(object):
         ):
 
         from scipy import cluster
+        import copy
         import numpy as np
 
         if cluster_systems:
@@ -1436,7 +1452,7 @@ class BaseOptimizer(object):
         smiles_list = list(set(smiles_list))
         ### We need this `self._generator_smiles_list` in order
         ### to restart the optimization run
-        self._generator_smiles_list = smiles_list
+        self._generator_smiles_list = copy.deepcopy(smiles_list)
         self._set_system_list(smiles_list)
         ### Re-order and re-index 
         ### system_idx_list_batch

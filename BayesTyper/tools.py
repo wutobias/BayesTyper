@@ -980,7 +980,7 @@ class SystemManagerLoader(object):
             if isinstance(smi, str):
                 if smi not in self.smiles_list:
                     raise ValueError(
-                            f"{smi} not in internal smiles list: {self.smiles_list}")
+                        f"{smi} not in internal smiles list: {self.smiles_list}")
                 _smiles_list.extend(
                     self.rdmol_to_smiles_map_dict[smi])
             elif isinstance(smi, int):
@@ -1076,8 +1076,9 @@ class SystemManagerLoader(object):
 
         for smi in smiles_list:
             if smi in system_manager._rdmol_list:
-                print(
-                    f"Adding {smi}")
+                if self.verbose:
+                    print(
+                        f"Adding {smi}")
                 sys_idx = system_manager._rdmol_list.index(smi)
                 sys     = system_manager._system_list[sys_idx]
                 self.system_cache_dict[smi] = copy.deepcopy(sys)
