@@ -2413,9 +2413,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                     print(
                         "Finding best parameters.")
                 self.system_idx_list_batch = self.system_idx_list_batch[::-1]
-                gibbs_dict = dict()
-                gibbs_count_dict = dict()
-
                 selection_list = list(self.selection_worker_id_dict.keys())
                 for mngr_idx, sys_idx_pair in selection_list:
                     selection_worker_id_list = list(
@@ -2574,6 +2571,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                 ### ================= ###
                 ### END SPLIT ATTEMPT ###
                 ### ================= ###
+
+                self.system_manager_loader.clear_cache()
             
             ### Remove tempory data
             if restart:
