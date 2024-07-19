@@ -970,28 +970,32 @@ class SystemManagerLoader(object):
 
         self.system_cache_dict.clear()
 
-    def _check_smiles_list(self, query_smiles_list):
+    def _check_smiles_list(self, query_smiles_list=None):
 
         if isinstance(query_smiles_list, type(None)):
             return self._query_smiles_list
-        
+
+        import warnings
+
         _smiles_list = list()
         for smi in query_smiles_list:
             if isinstance(smi, str):
                 if smi not in self.smiles_list:
-                    raise ValueError(
-                        f"{smi} not in internal smiles list: {self.smiles_list}")
+                    warnings.warn(
+                        f"{smi} not in internal smiles list (length {len(self.smiles_list)})")
+                    continue
                 _smiles_list.extend(
                     self.rdmol_to_smiles_map_dict[smi])
             elif isinstance(smi, int):
                 if smi > (len(self.smiles_list)-1):
-                    raise ValueError(
-                        f"{smi} not in internal smiles list of length {len(self.smiles_list)}")
+                    warnings.warn(
+                        f"{smi} not in internal smiles list (length {len(self.smiles_list)}")
+                    continue
                 _smiles_list.extend(
                     self.rdmol_to_smiles_map_dict[
                         self.smiles_list[smi]])
             else:
-                raise ValueError(
+                warnings.warn(
                     f"{smi} not understood")
 
         return _smiles_list
@@ -1015,7 +1019,7 @@ class SystemManagerLoader(object):
                         smi_worker_list, optdataset_dict_id)
                 worker_id_list.append(worker_id)
                 smi_worker_list = list()
-        if smi_worker_list:
+        if len(smi_worker_list) > 0:
             worker_id = generate_rdmol_dict.remote(
                     smi_worker_list, optdataset_dict_id)
             worker_id_list.append(worker_id)
