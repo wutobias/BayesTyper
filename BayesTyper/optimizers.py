@@ -621,7 +621,7 @@ def minimize_FF(
 
 
 @ray.remote(num_cpus=0.1)
-def set_parameters_remote(
+def validate_FF(
     mngr_idx_main,
     pvec_list,
     targetcomputer,
@@ -900,6 +900,9 @@ class BaseOptimizer(object):
                 [self.system_list[sys_idx] for sys_idx in sys_idx_pair])
             self.targetcomputer_id_dict[sys_idx_pair] = ray.put(
                 targetcomputer)
+            #print(
+            #        targetcomputer.target_dict,
+            #        [self.system_list[sys_idx].name for sys_idx in sys_idx_pair])
 
 
     def add_parameters(
@@ -925,8 +928,17 @@ class BaseOptimizer(object):
 
         self.system_manager_loader.add_parameter_manager(
             parameter_manager)
-        self._set_system_list(
-            self.smiles_list[:5])
+        ### 100 attempts to build initial type
+        found_system = False
+        for _ in range(100):
+            smi = np.random.choice(self.smiles_list)
+            self._set_system_list([smi])
+            if len(self.system_list) > 0:
+                found_system = True
+                break
+        if not found_system:
+            raise ValueError(
+                f"Could not build initial system with parameter manager {self._N_mngr}")
 
         self.parameter_manager_list.append(parameter_manager)
         parm_mngr = self.generate_parameter_manager(self.N_mngr)
@@ -953,7 +965,6 @@ class BaseOptimizer(object):
 
         [pvec], _ = self.generate_parameter_vectors(
             mngr_idx_list=[self.N_mngr-1])
-
         if rich_types:
             import copy
             _bond_ring = copy.deepcopy(
@@ -1201,8 +1212,11 @@ class BaseOptimizer(object):
         import copy
 
         self.clear_cache([mngr_idx])
-
         if hasattr(pvec, "vector_k"):
+            import warnings
+            if pvec.force_group_count != len(b_list):
+                warnings.warn(
+                        f"Number of force groups {pvec.force_group_count} and length of bitvector list {len(b_list)} must be identical.")
             self.best_pvec_list[mngr_idx] = pvec.vector_k[:].copy()
         else:
             self.best_pvec_list[mngr_idx] = pvec[:].copy()
@@ -1436,8 +1450,8 @@ class BaseOptimizer(object):
 
             system_idx_list_batch = tuple()
             for _ in range(N_batches):
-                np.random.shuffle(system_idx_list)
-                sys_list = system_idx_list[:N_sys_per_batch].tolist()
+                sys_list = np.random.choice(
+                    system_idx_list, size=N_sys_per_batch).tolist()
                 sys_list = tuple(sorted(sys_list))
                 system_idx_list_batch += tuple([sys_list])
 
@@ -1446,7 +1460,6 @@ class BaseOptimizer(object):
         smiles_list= list()
         for sys_idx_list in system_idx_list_batch:
             for sys_idx in sys_idx_list:
-                smi = self.smiles_list[sys_idx]
                 smiles_list.append(
                     self.smiles_list[sys_idx])
         smiles_list = list(set(smiles_list))
@@ -1456,6 +1469,9 @@ class BaseOptimizer(object):
         self._set_system_list(smiles_list)
         ### Re-order and re-index 
         ### system_idx_list_batch
+
+        ### sys_map_dict maps from smiles_list ordering
+        ### to system_list ordering
         sys_map_dict = dict()
         for sys_idx, sys in enumerate(self.system_list):
             ### sys_idx in `self.system_list` counting
@@ -1464,6 +1480,7 @@ class BaseOptimizer(object):
             if name in self.smiles_list:
                 _sys_idx = self.smiles_list.index(name)
                 sys_map_dict[_sys_idx] = sys_idx
+
         system_idx_list_batch_new = tuple()
         for sys_idx_list in system_idx_list_batch:
             sys_list = list()
@@ -1473,9 +1490,7 @@ class BaseOptimizer(object):
             sys_list = tuple(sorted(sys_list))
             system_idx_list_batch_new += tuple([sys_list])
 
-        system_idx_list_batch = system_idx_list_batch_new
-
-        return system_idx_list_batch
+        return system_idx_list_batch_new
 
 
     def split_bitvector(
@@ -1515,16 +1530,6 @@ class BaseOptimizer(object):
         else:
             type_query_list = [N_types-1]
 
-        for _ in range(20):
-            try:
-                pvec_id = ray.put(pvec)
-                break
-            except:
-                if _VERBOSE:
-                    import traceback
-                    print(traceback.format_exc())
-                import time
-                time.sleep(2)
         worker_id_dict = dict()
         alloc_bitvec_degeneracy_dict = dict()
         for type_i in type_query_list:
@@ -1604,6 +1609,7 @@ class BaseOptimizer(object):
             N_array_splits = 2
             if max_splits_effective > 10:
                 N_array_splits = int(max_splits_effective/10)
+            pvec_id = ray.put(pvec)
             for split_idxs in np.array_split(np.arange(max_splits_effective), N_array_splits):
                 worker_id = get_gradient_scores.remote(
                     ff_parameter_vector = pvec_id,
@@ -1984,6 +1990,8 @@ class ForceFieldOptimizer(BaseOptimizer):
         local_targets = False,
         ):
 
+        import copy
+
         use_scipy = True
 
         if len(system_idx_list) == 0:
@@ -1994,48 +2002,26 @@ class ForceFieldOptimizer(BaseOptimizer):
             [],
             system_idx_list,
             )
-        for _ in range(20):
-            try:
-                system_list_id = ray.put(system_list)
-                bitvec_type_list_id = ray.put(bitvec_type_list)
-                break
-            except:
-                if _VERBOSE:
-                    import traceback
-                    print(traceback.format_exc())
-                import time
-                time.sleep(2)
 
-        pvec_cp = pvec_all[mngr_idx_main].copy()
+        system_list_id = ray.put(system_list)
+        bitvec_type_list_id = ray.put(bitvec_type_list)
+        pvec_cp = pvec_all[mngr_idx_main].vector_k[:].copy()
+        allocations_cp = copy.deepcopy(pvec_all[mngr_idx_main].allocations)
         N_types = pvec_all[mngr_idx_main].force_group_count
-
-        pvec_all, bitvec_type_list = self.generate_parameter_vectors(
-            [],
-            system_idx_list,
-            )
 
         worker_id_dict = dict()
         ### Query split candidates
         ### ======================
         for counts, ast in enumerate(votes_split_list):
-            allocation, selection, type_ = ast
+            allocations, selection, type_ = ast
 
             pvec_all[mngr_idx_main].duplicate(type_[0])
             pvec_all[mngr_idx_main].swap_types(N_types, type_[1])
-            pvec_all[mngr_idx_main].allocations[:] = list(allocation)
+            pvec_all[mngr_idx_main].allocations[:] = allocations[:]
             pvec_all[mngr_idx_main].apply_changes()
 
             pvec_all_cp = [pvec.copy() for pvec in pvec_all]
-            for _ in range(20):
-                try:
-                    pvec_all_id = ray.put(pvec_all_cp)
-                    break
-                except:
-                    if _VERBOSE:
-                        import traceback
-                        print(traceback.format_exc())
-                    import time
-                    time.sleep(2)
+            pvec_all_id = ray.put(pvec_all_cp)
 
             worker_id = minimize_FF.remote(
                     system_list = system_list_id,
@@ -2066,7 +2052,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 self._N_sys_per_likelihood_batch,
                 system_idx_list
                 )
-            pvec_all[mngr_idx_main].reset(pvec_cp)
+
+            pvec_all[mngr_idx_main].reset(
+                pvec_cp, allocations_cp)
 
         return worker_id_dict
 
@@ -2115,8 +2103,17 @@ class ForceFieldOptimizer(BaseOptimizer):
         from .bitvector_typing import bitvec_hierarchy_to_allocations
         import pickle
          
-        self._set_system_list(
-            self.smiles_list[:5])
+        ### 100 attempts to build initial type
+        found_system = False
+        for _ in range(100):
+            smi = np.random.choice(self.smiles_list)
+            self._set_system_list([smi])
+            if len(self.system_list) > 0:
+                found_system = True
+                break
+        if not found_system:
+            raise ValueError(
+                f"Could not build initial system with parameter manager {self._N_mngr}")
         pvec_list, bitvec_type_list = self.generate_parameter_vectors()
         for mngr_idx in range(self.N_mngr):
             self.update_best(
@@ -2340,7 +2337,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
                                             _mngr_idx, sys_idx_validation)
                                     bitvec_alloc_dict_list.append(bitvec_alloc_dict)
-                                worker_id = set_parameters_remote.remote(
+                                worker_id = validate_FF.remote(
                                     mngr_idx_main = mngr_idx,
                                     pvec_list = old_pvec_list,
                                     targetcomputer = self.targetcomputer_id_dict[sys_idx_validation],
@@ -2404,7 +2401,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
                                         _mngr_idx, sys_idx_validation)
                                 bitvec_alloc_dict_list.append(bitvec_alloc_dict)
-                            worker_id = set_parameters_remote.remote(
+                            worker_id = validate_FF.remote(
                                 mngr_idx_main = mngr_idx,
                                 pvec_list = old_pvec_list,
                                 targetcomputer = self.targetcomputer_id_dict[sys_idx_validation],
@@ -2552,6 +2549,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         [old_pvec], _ = self.generate_parameter_vectors(
                             mngr_idx_list=[mngr_idx],
                             system_idx_list=self.sys_idx_list_validation[0])
+
                     self.update_best(
                         mngr_idx,
                         pvec_list[mngr_idx],

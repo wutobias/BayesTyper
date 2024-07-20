@@ -678,19 +678,6 @@ def remove_types(
 
     for mngr in mngr_list:
         if isinstance(mngr, torsion_mngr_list):
-            #for periodicity in range(1,11):
-            #    for phase in [0., 40., 90., 180., 270., 320., 360.]:
-            #        phase *= np.pi/180.*unit.radian
-            #        for sign in [-1.,1.]:
-            #            _remove_types(
-            #                parameter_manager = ProperTorsionManager(
-            #                    periodicity,
-            #                    phase,
-            #                    exclude_list = ["periodicity", "phase"]),
-            #                system_list = system_list,
-            #                remaining_type_idx = _INACTIVE_GROUP_IDX,
-            #                set_inactive = True
-            #            )
             _remove_types_torsion(system_list)
             _mngr = copy.deepcopy(mngr)
             for _ in range(_mngr.N_systems):
@@ -870,37 +857,58 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
 @ray.remote
 def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list):
     from . import system
-    system_list = [system.from_qcschema(
-        _qcentry, _smiles, _forcefield_name)]
-    remove_types(
-        system_list,
-        remove_types_manager_list)
-    return system_list[0]
+    import warnings
+    try:
+        system_list = [system.from_qcschema(
+            _qcentry, _smiles, _forcefield_name)]
+        remove_types(
+            system_list,
+            remove_types_manager_list)
+        return system_list[0]
+    except:
+        warnings.warn(
+            f"Could not build system {_smiles}")
+        return None
 
 
 @ray.remote
 def generate_rdmol_dict(smiles_list, optdataset_dict):
 
+    import warnings
     from openff.toolkit.topology import Molecule
     from rdkit import Chem
 
     rdmol_dict = dict()
     for smiles in smiles_list:
-        key = list(
-            optdataset_dict[smiles].keys())[0]
+        found_valid_qcentry = False
         if "qcentry" in optdataset_dict[smiles]:
             qcentry = optdataset_dict[smiles]["qcentry"]
-        elif "qcentry" in optdataset_dict[smiles][key]:
-            qcentry = optdataset_dict[smiles][key]["qcentry"]
+            try:
+                offmol = Molecule.from_qcschema(
+                    qcentry, allow_undefined_stereo=False)
+                found_valid_qcentry = True
+            except:
+                continue
         else:
-            continue
-        offmol = Molecule.from_qcschema(
-            qcentry, allow_undefined_stereo=True)
-        rdmol  = offmol.to_rdkit()
-        smi    = Chem.MolToSmiles(
-                rdmol,
-                isomericSmiles=False)
-        rdmol_dict[smiles] = rdmol, smi
+            for key in optdataset_dict[smiles]:
+                if "qcentry" in optdataset_dict[smiles][key]:
+                    qcentry = optdataset_dict[smiles][key]["qcentry"]
+                    try:
+                        offmol = Molecule.from_qcschema(
+                            qcentry, allow_undefined_stereo=False)
+                        found_valid_qcentry = True
+                        break
+                    except:
+                        continue
+        if found_valid_qcentry:
+            rdmol  = offmol.to_rdkit()
+            smi    = Chem.MolToSmiles(
+                    rdmol,
+                    isomericSmiles=False)
+            rdmol_dict[smiles] = rdmol, smi
+        else:
+            warnings.warn(
+                f"Could not load {smiles}")
 
     return rdmol_dict
 
@@ -950,6 +958,10 @@ class SystemManagerLoader(object):
         self.force_projection    = force_projection
         self.reference_to_lowest = reference_to_lowest
         self.verbose             = verbose
+
+        self.rdmol_dict = dict()
+        self.rdmol_to_smiles_map_dict = dict()
+        self.smiles_list = list()
 
         import copy
         self._remove_types_manager_list = copy.deepcopy(remove_types_manager_list)
@@ -1257,6 +1269,8 @@ def generate_systemmanager(
             sys = ray.get(worker_id)
         except:
             continue
+        if isinstance(sys, type(None)):
+            continue
 
         smi = Chem.MolToSmiles(
             sys.offmol.to_rdkit(),
@@ -1308,6 +1322,8 @@ def generate_systemmanager(
                     torsion_geo_list = list()
                     torsion_ene_list = list()
                     for dih_i in torsiondataset_dict[smiles][conf_i]:
+                        if not isinstance(torsiondataset_dict[smiles][conf_i][dih_i], dict):
+                            continue
                         if "final_geo" in torsiondataset_dict[smiles][conf_i][dih_i]:
                             if "final_ene" in torsiondataset_dict[smiles][conf_i][dih_i]:
                                 torsion_geo_list.extend(
