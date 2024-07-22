@@ -457,7 +457,7 @@ def from_qcschema(qcschema,
                   FF_name=_DEFAULT_FF):
 
     offmol = Molecule.from_qcschema(
-        qcschema, allow_undefined_stereo=False)
+        qcschema, allow_undefined_stereo=True)
     return from_offmol(offmol, name, FF_name)
 
 

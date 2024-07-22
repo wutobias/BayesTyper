@@ -1279,6 +1279,7 @@ class BaseOptimizer(object):
         else:
             worker_id_list = list()
             parm_mngr = copy.deepcopy(self.parameter_manager_list[mngr_idx])
+            parm_mngr_id = ray.put(parm_mngr)
             s_list   = tuple()
             idx_list = tuple()
             for sys_idx in _system_idx_list:
@@ -1286,13 +1287,13 @@ class BaseOptimizer(object):
                 idx_list += (sys_idx,)
                 if len(s_list) == _CHUNK_SIZE:
                     worker_id = generate_parameter_manager.remote(
-                        s_list, parm_mngr)
+                        s_list, parm_mngr_id)
                     worker_id_list.append([worker_id, idx_list])
                     s_list   = tuple()
                     idx_list = tuple()
             if len(s_list) > 0:
                 worker_id = generate_parameter_manager.remote(
-                        s_list, parm_mngr)
+                        s_list, parm_mngr_id)
                 worker_id_list.append([worker_id, idx_list])
             sys_counts = 0
             for worker_id, idx_list in worker_id_list:
@@ -2213,8 +2214,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     time_diff_dict = dict()
                     for sys_idx_pair in self.system_idx_list_batch:
                         time_diff_dict[sys_idx_pair] = 0.
-                        pvec_list, _ = self.generate_parameter_vectors([0], sys_idx_pair)
-                        pvec_id = ray.put(pvec_list[0])
+                        [pvec], _ = self.generate_parameter_vectors([0], sys_idx_pair)
+                        pvec_id = ray.put(pvec)
                         for _ in range(N_trials_opt):
                             worker_id = _test_logL.remote(
                                 pvec_id, 

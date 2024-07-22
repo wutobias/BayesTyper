@@ -885,7 +885,7 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
             qcentry = optdataset_dict[smiles]["qcentry"]
             try:
                 offmol = Molecule.from_qcschema(
-                    qcentry, allow_undefined_stereo=False)
+                    qcentry, allow_undefined_stereo=True)
                 found_valid_qcentry = True
             except:
                 continue
@@ -895,7 +895,7 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
                     qcentry = optdataset_dict[smiles][key]["qcentry"]
                     try:
                         offmol = Molecule.from_qcschema(
-                            qcentry, allow_undefined_stereo=False)
+                            qcentry, allow_undefined_stereo=True)
                         found_valid_qcentry = True
                         break
                     except:
@@ -1278,9 +1278,10 @@ def generate_systemmanager(
             )
         sys_target = sys
         if smi in systemmanager._rdmol_list:
-            index      = systemmanager._rdmol_list.index(smi)
-            sys        = systemmanager._system_list[index]
+            index = systemmanager._rdmol_list.index(smi)
+            sys   = systemmanager._system_list[index]
         else:
+            sys._name = smi
             systemmanager.add_system(sys)
 
         final_geo_list = list()

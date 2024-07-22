@@ -98,8 +98,8 @@ class LikelihoodVectorized(object):
                                 parm_idx_sysname_dict[sys_idx].append(parm_idx)
                             if sys_idx not in sysidx_parm_idx_dict[parm_idx]:
                                 sysidx_parm_idx_dict[parm_idx].append(sys_idx)
-                    p_idx        += 1
-                    parm_idx     += 1
+                    p_idx    += 1
+                    parm_idx += 1
 
         self.N_parms = parm_idx
         self.parm_idx_map_dict     = parm_idx_map_dict

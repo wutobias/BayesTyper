@@ -811,13 +811,13 @@ class TargetComputer(object):
         if local:
             result = target_worker_local(
                 openmm_system_dict, 
-                {sys_name : self.target_dict[sys_name] for sys_name,sys_key in openmm_system_dict},
+                {sys_name : self.target_dict[sys_name] for sys_name, sys_key in openmm_system_dict},
                 return_results_dict)
             return result
         else:
             worker_id = target_worker.remote(
                 openmm_system_dict, 
-                {sys_name : self.target_dict[sys_name] for sys_name,sys_key in openmm_system_dict},
+                {sys_name : self.target_dict[sys_name] for sys_name, sys_key in openmm_system_dict},
                 return_results_dict)
             return worker_id
 

@@ -464,7 +464,7 @@ def sanitize_atom_smarts(sma):
 
 
 class BitSmartsManager(object):
-    
+
     import numpy as np
     
     aromatic_smarts = ["a", "A"]
