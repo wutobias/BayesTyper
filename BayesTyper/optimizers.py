@@ -901,8 +901,8 @@ class BaseOptimizer(object):
             self.targetcomputer_id_dict[sys_idx_pair] = ray.put(
                 targetcomputer)
             #print(
-            #        targetcomputer.target_dict,
-            #        [self.system_list[sys_idx].name for sys_idx in sys_idx_pair])
+            #        "target_dict:", targetcomputer.target_dict.keys(),
+            #        "system_list:", [self.system_list[sys_idx].name for sys_idx in sys_idx_pair])
 
 
     def add_parameters(

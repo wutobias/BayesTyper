@@ -294,7 +294,7 @@ def get_plots(
                 density=True,
             )
             axs[N_plots].set_xlabel(r"$\Delta$ Torsion angle [deg]")
-            axs[N_plots].set_ylabel("Density")
+            axs[N_plots].set_ylabel("Density").
             if smiles in title_dict:
                 axs[N_plots].set_title(f"Torsion angle error {title_dict[smiles]}")
             else:
