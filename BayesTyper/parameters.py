@@ -756,8 +756,9 @@ class ParameterManager(object):
         memo[id(self)] = result
         for k, v in self.__dict__.items():
             if k == "system_list":
-                if not self._include_system_list:
-                    continue
+                if hasattr(self, "_include_system_list"):
+                    if not self._include_system_list:
+                        continue
             setattr(result, k, copy.deepcopy(v, memo))
         return result
     
