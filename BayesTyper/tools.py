@@ -63,6 +63,8 @@ def write_pdb(system_list, optdataset_dict):
         sys = system_list[sys_idx]
         smiles = sys.name
         for conf_i in optdataset_dict[smiles]:
+            if not "final_geo"in optdataset_dict[smiles][conf_i]:
+                continue
             xyz = optdataset_dict[smiles][conf_i]["final_geo"]
             if not unit.is_quantity(xyz):
                 xyz *= _LENGTH_AU
@@ -92,8 +94,8 @@ def get_plots(
     systemmanager,
     title_dict=dict(),
     name_reference_level_of_theory="b3lyp/dzvp",
-    big_plot=False, 
     add_plots=0, 
+    generate_plots=False,
     N_col=3,
     verbose=False,
     optdataset_dict_path=None, 
@@ -101,7 +103,8 @@ def get_plots(
     skip_torsion=False,
     skip_optgeo=False,
     skip_vib=False,
-    skip_offeq=False):
+    skip_offeq=False,
+    enecutoff5=False):
 
     import pickle
     import numpy as np
@@ -155,50 +158,51 @@ def get_plots(
         )
     N_sys = len(systemlist)
 
-    ### Determine number of plots to make
-    N_plots = add_plots
-    for sys_idx in range(N_sys):
-        sys = systemlist[sys_idx]
-        smiles = sys.name
-        if not skip_vib:
-            ### Freq.
-            N_plots += 1
-        if not skip_offeq:
-            ### Off-Equ.
-            N_plots += 1
-        if not skip_optgeo:
-            ### OptGeo
-            N_plots += 3
-        if not skip_torsion and smiles in torsiondataset_dict:
-            for conf_i in torsiondataset_dict[smiles]:
-                for dih_i in torsiondataset_dict[smiles][conf_i]:
-                    ### Torsion
-                    N_plots += 1
+    if generate_plots:
+        ### Determine number of plots to make
+        N_plots = add_plots
+        for sys_idx in range(N_sys):
+            sys = systemlist[sys_idx]
+            smiles = sys.name
+            if not skip_vib:
+                ### Freq.
+                N_plots += 1
+            if not skip_offeq:
+                ### Off-Equ.
+                N_plots += 1
+            if not skip_optgeo:
+                ### OptGeo
+                N_plots += 3
+            if not skip_torsion and smiles in torsiondataset_dict:
+                for conf_i in torsiondataset_dict[smiles]:
+                    for dih_i in torsiondataset_dict[smiles][conf_i]:
+                        ### Torsion
+                        N_plots += 1
 
-    N_rows  = int(N_plots/N_col)
-    if N_plots%N_col > 0:
-        N_rows += 1
-    fig, _axs = plt.subplots(
-        nrows=N_rows, 
-        ncols=N_col,
-        ### Width,Height in inches
-        figsize=(3.3*N_col,3.*N_rows)
-    )
-    axs = _axs.reshape(-1)
-    
-    tobe_deleted = list()
-    if N_plots%N_col > 0:
-        hangover = N_col - N_plots%N_col
-        for h in range(hangover):
-            tobe_deleted.append(N_plots+h)
-    tobe_deleted = sorted(tobe_deleted)[::-1]
-    for i in tobe_deleted:
-        fig.delaxes(axs[i])
-    _axs = np.delete(axs, tobe_deleted)
-    axs = _axs
+        N_rows  = int(N_plots/N_col)
+        if N_plots%N_col > 0:
+            N_rows += 1
+        fig, _axs = plt.subplots(
+            nrows=N_rows, 
+            ncols=N_col,
+            ### Width,Height in inches
+            figsize=(3.3*N_col,3.*N_rows)
+        )
+        axs = _axs.reshape(-1)
+        
+        tobe_deleted = list()
+        if N_plots%N_col > 0:
+            hangover = N_col - N_plots%N_col
+            for h in range(hangover):
+                tobe_deleted.append(N_plots+h)
+        tobe_deleted = sorted(tobe_deleted)[::-1]
+        for i in tobe_deleted:
+            fig.delaxes(axs[i])
+        _axs = np.delete(axs, tobe_deleted)
+        axs = _axs
 
-    N_plots_fig = N_plots
-    N_plots = 0
+        N_plots_fig = N_plots
+        N_plots = 0
 
     all_bond_diff_list = list()
     all_angle_diff_list = list()
@@ -222,6 +226,8 @@ def get_plots(
         torsion_diffs = list()
         if not skip_optgeo and smiles in optdataset_dict:
             for conf_i in optdataset_dict[smiles]:
+                if not "final_geo" in optdataset_dict[smiles][conf_i]:
+                    continue
                 xyz    = optdataset_dict[smiles][conf_i]["final_geo"]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
@@ -258,48 +264,51 @@ def get_plots(
                             diff.value_in_unit(_ANGLE))
 
         if len(bond_diffs):
-            axs[N_plots].hist(
-                bond_diffs,
-                histtype="step",
-                density=True,
-            )
-            axs[N_plots].set_xlabel(r"$\Delta$ Bond length [nm]")
-            axs[N_plots].set_ylabel("Density")
-            if smiles in title_dict:
-                axs[N_plots].set_title(f"Bond length error {title_dict[smiles]}")
-            else:
-                axs[N_plots].set_title(f"Bond length error {smiles}")
-            N_plots += 1
+            if generate_plots:
+                axs[N_plots].hist(
+                    bond_diffs,
+                    histtype="step",
+                    density=True,
+                )
+                axs[N_plots].set_xlabel(r"$\Delta$ Bond length [nm]")
+                axs[N_plots].set_ylabel("Density")
+                if smiles in title_dict:
+                    axs[N_plots].set_title(f"Bond length error {title_dict[smiles]}")
+                else:
+                    axs[N_plots].set_title(f"Bond length error {smiles}")
+                N_plots += 1
             all_bond_diff_list.extend(bond_diffs)
 
         if len(angle_diffs):
-            axs[N_plots].hist(
-                angle_diffs,
-                histtype="step",
-                density=True,
-            )
-            axs[N_plots].set_xlabel(r"$\Delta$ Bond angle [deg]")
-            axs[N_plots].set_ylabel("Density")
-            if smiles in title_dict:
-                axs[N_plots].set_title(f"Bond angle error {title_dict[smiles]}")
-            else:
-                axs[N_plots].set_title(f"Bond angle error {smiles}")
-            N_plots += 1
+            if generate_plots:
+                axs[N_plots].hist(
+                    angle_diffs,
+                    histtype="step",
+                    density=True,
+                )
+                axs[N_plots].set_xlabel(r"$\Delta$ Bond angle [deg]")
+                axs[N_plots].set_ylabel("Density")
+                if smiles in title_dict:
+                    axs[N_plots].set_title(f"Bond angle error {title_dict[smiles]}")
+                else:
+                    axs[N_plots].set_title(f"Bond angle error {smiles}")
+                N_plots += 1
             all_angle_diff_list.extend(angle_diffs)
 
         if len(torsion_diffs):
-            axs[N_plots].hist(
-                torsion_diffs,
-                histtype="step",
-                density=True,
-            )
-            axs[N_plots].set_xlabel(r"$\Delta$ Torsion angle [deg]")
-            axs[N_plots].set_ylabel("Density").
-            if smiles in title_dict:
-                axs[N_plots].set_title(f"Torsion angle error {title_dict[smiles]}")
-            else:
-                axs[N_plots].set_title(f"Torsion angle error {smiles}")
-            N_plots += 1
+            if generate_plots:
+                axs[N_plots].hist(
+                    torsion_diffs,
+                    histtype="step",
+                    density=True,
+                )
+                axs[N_plots].set_xlabel(r"$\Delta$ Torsion angle [deg]")
+                axs[N_plots].set_ylabel("Density")
+                if smiles in title_dict:
+                    axs[N_plots].set_title(f"Torsion angle error {title_dict[smiles]}")
+                else:
+                    axs[N_plots].set_title(f"Torsion angle error {smiles}")
+                N_plots += 1
             all_torsion_diff_list.extend(torsion_diffs)
 
         freqs_mm_list = list()
@@ -311,6 +320,8 @@ def get_plots(
                 hessian_qm = optdataset_dict[smiles][conf_i]["hessian"]
                 if not unit.is_quantity(hessian_qm):
                     hessian_qm *= _FORCE_AU / _LENGTH_AU
+                if not "final_geo" in optdataset_dict[smiles][conf_i]:
+                    continue
                 xyz = optdataset_dict[smiles][conf_i]["final_geo"]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
@@ -323,30 +334,31 @@ def get_plots(
                 freqs_mm_list.extend(freqs_mm._value)
                 freqs_qm_list.extend(freqs_qm._value)
                 
-            all_vib_diff_list = np.array(freqs_mm_list) - np.array(freqs_qm_list)
-            all_vib_diff_list = all_vib_diff_list
+            freqs_qm_list = np.array(freqs_qm_list)
+            freqs_qm_list = np.array(freqs_qm_list)
+            all_vib_diff_list.extend(
+                (freqs_qm_list - freqs_mm_list).tolist())
 
-        if len(freqs_mm_list) == 0:
-            continue
-        axs[N_plots].scatter(
-            freqs_mm_list,
-            freqs_qm_list,
-            color="red"
-        )
-        axs[N_plots].set_xlabel("This FF [cm-1]")
-        axs[N_plots].set_ylabel(r"$\nu$ " + f"({name_reference_level_of_theory}) [cm-1]")
-        if smiles in title_dict:
-            axs[N_plots].set_title(f"VibFreq {title_dict[smiles]}")
-        else:
-            axs[N_plots].set_title(f"VibFreq {smiles}")
-        if len(freqs_mm_list)>0 and len(freqs_qm_list)>0:
-            axs[N_plots].plot(
-                [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
-                linestyle="--",
-                color="black"
+        if generate_plots and len(freqs_mm_list) > 0:
+            axs[N_plots].scatter(
+                freqs_mm_list,
+                freqs_qm_list,
+                color="red"
             )
-        N_plots += 1
+            axs[N_plots].set_xlabel("This FF [cm-1]")
+            axs[N_plots].set_ylabel(r"$\nu$ " + f"({name_reference_level_of_theory}) [cm-1]")
+            if smiles in title_dict:
+                axs[N_plots].set_title(f"VibFreq {title_dict[smiles]}")
+            else:
+                axs[N_plots].set_title(f"VibFreq {smiles}")
+            if len(freqs_mm_list)>0 and len(freqs_qm_list)>0:
+                axs[N_plots].plot(
+                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
+                    [min(*freqs_mm_list, *freqs_qm_list), max(*freqs_mm_list, *freqs_qm_list)],
+                    linestyle="--",
+                    color="black"
+                )
+            N_plots += 1
 
         mm_ene_list = list()
         qm_ene_list = list()
@@ -358,6 +370,10 @@ def get_plots(
                     continue
                 ene_list_qm = optdataset_dict[smiles][conf_i]["ene_list"]
                 geo_list_qm = optdataset_dict[smiles][conf_i]["geo_list"]
+                if len(geo_list_qm) == 0:
+                    continue
+                if len(ene_list_qm) == 0:
+                    continue
                 xyz         = geo_list_qm[0]
                 if not unit.is_quantity(xyz):
                     xyz *= _LENGTH_AU
@@ -379,34 +395,35 @@ def get_plots(
             min_arg     = np.argmin(qm_ene_list)
             qm_ene_list = qm_ene_list - qm_ene_list[min_arg]
             mm_ene_list = mm_ene_list - mm_ene_list[min_arg]
-            ### Less then 5 kcal/mol
-            valids      = np.where(qm_ene_list < 20.92)
-            qm_ene_list = qm_ene_list[valids]
-            mm_ene_list = mm_ene_list[valids]
-            all_offeq_diff_list = qm_ene_list - mm_ene_list
+            if enecutoff5:
+                ### Less then 5 kcal/mol
+                valids      = np.where(qm_ene_list < 20.92)
+                qm_ene_list = qm_ene_list[valids]
+                mm_ene_list = mm_ene_list[valids]
+            all_offeq_diff_list.extend(
+                (qm_ene_list - mm_ene_list).tolist())
 
-        if len(mm_ene_list) == 0:
-            continue
-        axs[N_plots].scatter(
-            mm_ene_list,
-            qm_ene_list,
-            color="blue"
-            )
-        axs[N_plots].set_xlabel("Energy (this FF) [kJ/mol]")
-        axs[N_plots].set_ylabel(f"Energy ({name_reference_level_of_theory}) [kJ/mol]")
-        
-        if smiles in title_dict:
-            axs[N_plots].set_title(f"OffEqEne {title_dict[smiles]}")
-        else:
-            axs[N_plots].set_title(f"OffEqEne {smiles}")
-        if len(mm_ene_list)>0 and len(qm_ene_list)>0:
-            axs[N_plots].plot(
-                [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
-                linestyle="--",
-                color="black"
-            )
-        N_plots += 1
+        if generate_plots and len(mm_ene_list) > 0:
+            axs[N_plots].scatter(
+                mm_ene_list,
+                qm_ene_list,
+                color="blue"
+                )
+            axs[N_plots].set_xlabel("Energy (this FF) [kJ/mol]")
+            axs[N_plots].set_ylabel(f"Energy ({name_reference_level_of_theory}) [kJ/mol]")
+            
+            if smiles in title_dict:
+                axs[N_plots].set_title(f"OffEqEne {title_dict[smiles]}")
+            else:
+                axs[N_plots].set_title(f"OffEqEne {smiles}")
+            if len(mm_ene_list)>0 and len(qm_ene_list)>0:
+                axs[N_plots].plot(
+                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
+                    [min(*mm_ene_list, *qm_ene_list), max(*mm_ene_list, *qm_ene_list)],
+                    linestyle="--",
+                    color="black"
+                )
+            N_plots += 1
 
         if not skip_torsion and smiles in torsiondataset_dict:
             for conf_i in torsiondataset_dict[smiles]:
@@ -420,6 +437,9 @@ def get_plots(
                     xyz_list = torsiondataset_dict[smiles][conf_i][dih_i]["final_geo"]
                     ene_list = torsiondataset_dict[smiles][conf_i][dih_i]["final_ene"]
                     crd_list = torsiondataset_dict[smiles][conf_i][dih_i]["dih"]
+
+                    if len(xyz_list) == 0:
+                        continue
 
                     qm_ene_list = list()
                     mm_ene_list = list()
@@ -453,37 +473,38 @@ def get_plots(
                     if verbose:
                         print("atom idxs:", torsiondataset_dict[smiles][conf_i][dih_i]["dih_idxs"])
 
-                    axs[N_plots].scatter(
-                        dih_crd_list[crd_sort_idxs],
-                        qm_ene_list[crd_sort_idxs],
-                        color="black",
-                        )
-                    axs[N_plots].scatter(
-                        dih_crd_list[crd_sort_idxs],
-                        mm_ene_list[crd_sort_idxs],
-                        color="green",
-                        )
-                    axs[N_plots].plot(
-                        dih_crd_list[crd_sort_idxs],
-                        qm_ene_list[crd_sort_idxs],
-                        label=f"{name_reference_level_of_theory}",
-                        color="black",
-                        )
-                    axs[N_plots].plot(
-                        dih_crd_list[crd_sort_idxs],
-                        mm_ene_list[crd_sort_idxs],
-                        label=f"This FF",
-                        color="green",
-                        )
-                    axs[N_plots].set_xlabel("Dihedral angle [degree]")
-                    axs[N_plots].set_ylabel("Energy [kJ/mol]")
+                    if generate_plots:
+                        axs[N_plots].scatter(
+                            dih_crd_list[crd_sort_idxs],
+                            qm_ene_list[crd_sort_idxs],
+                            color="black",
+                            )
+                        axs[N_plots].scatter(
+                            dih_crd_list[crd_sort_idxs],
+                            mm_ene_list[crd_sort_idxs],
+                            color="green",
+                            )
+                        axs[N_plots].plot(
+                            dih_crd_list[crd_sort_idxs],
+                            qm_ene_list[crd_sort_idxs],
+                            label=f"{name_reference_level_of_theory}",
+                            color="black",
+                            )
+                        axs[N_plots].plot(
+                            dih_crd_list[crd_sort_idxs],
+                            mm_ene_list[crd_sort_idxs],
+                            label=f"This FF",
+                            color="green",
+                            )
+                        axs[N_plots].set_xlabel("Dihedral angle [degree]")
+                        axs[N_plots].set_ylabel("Energy [kJ/mol]")
 
-                    if smiles in title_dict:
-                        axs[N_plots].set_title(f"TorEne {title_dict[smiles]}")
-                    else:
-                        axs[N_plots].set_title(f"TorEne {smiles}")
-                    axs[N_plots].legend(loc="upper left")
-                    N_plots += 1
+                        if smiles in title_dict:
+                            axs[N_plots].set_title(f"TorEne {title_dict[smiles]}")
+                        else:
+                            axs[N_plots].set_title(f"TorEne {smiles}")
+                        axs[N_plots].legend(loc="upper left")
+                        N_plots += 1
                 
                         
     if verbose:
@@ -500,9 +521,10 @@ def get_plots(
                 f"Torsion err {np.mean(all_torsion_diff_list):6.3f} +/- {np.std(all_torsion_diff_list):6.3f} deg"
                 )
 
-    diff_N_plots = N_plots_fig - N_plots
-    for i in range(1,diff_N_plots+1):
-        fig.delaxes(axs[-i])
+    if generate_plots:
+        diff_N_plots = N_plots_fig - N_plots
+        for i in range(1,diff_N_plots+1):
+            fig.delaxes(axs[-i])
         
     results_dict = {
         "bond_diff"       : np.array(all_bond_diff_list),
@@ -512,7 +534,10 @@ def get_plots(
         "vib_diff"        : np.array(all_vib_diff_list),
         "torsionene_diff" : np.array(all_torsionene_diff_list)}
     
-    return fig, axs, results_dict
+    if generate_plots:
+        return fig, axs, results_dict
+    else:
+        return results_dict
 
 @ray.remote
 def generate_parameter_manager(sys_list, parm_mngr):
@@ -917,6 +942,7 @@ class SystemManagerLoader(object):
 
     def __init__(
         self,
+        query_smiles_list=None,
         error_scale_geo = 1.0,
         error_scale_vib = 1.0,
         error_scale_offeq = 1.0,
@@ -938,7 +964,10 @@ class SystemManagerLoader(object):
         verbose = False,
         ):
 
-        self._query_smiles_list  = list(optdataset_dict.keys())
+        if isinstance(query_smiles_list, type(None)):
+            self._query_smiles_list  = list(optdataset_dict.keys())
+        else:
+            self._query_smiles_list = query_smiles_list
         self._query_smiles_list  = list(set(self._query_smiles_list))
         self.error_scale_geo     = error_scale_geo
         self.error_scale_vib     = error_scale_vib
