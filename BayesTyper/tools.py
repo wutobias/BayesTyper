@@ -317,7 +317,7 @@ def get_plots(
             for conf_i in optdataset_dict[smiles]:
                 if not "hessian" in optdataset_dict[smiles][conf_i]:
                     continue
-                hessian_qm = optdataset_dict[smiles][conf_i]["hessian"]
+                hessian_qm = np.array(optdataset_dict[smiles][conf_i]["hessian"])
                 if not unit.is_quantity(hessian_qm):
                     hessian_qm *= _FORCE_AU / _LENGTH_AU
                 if not "final_geo" in optdataset_dict[smiles][conf_i]:
@@ -327,7 +327,7 @@ def get_plots(
                     xyz *= _LENGTH_AU
                 engine = OpenmmEngine(sys.openmm_system, xyz)
                 engine.set_xyz(xyz)
-                engine.minimize()
+                #engine.minimize()
                 hessian_mm = engine.compute_hessian() / unit.constants.AVOGADRO_CONSTANT_NA
                 freqs_mm, modes_mm = compute_freqs(hessian_mm, masses)
                 freqs_qm, modes_qm = compute_freqs(hessian_qm, masses)
@@ -886,9 +886,10 @@ def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manage
     try:
         system_list = [system.from_qcschema(
             _qcentry, _smiles, _forcefield_name)]
-        remove_types(
-            system_list,
-            remove_types_manager_list)
+        if remove_types_manager_list:
+            remove_types(
+                system_list,
+                remove_types_manager_list)
         return system_list[0]
     except:
         warnings.warn(
@@ -1384,7 +1385,7 @@ def generate_systemmanager(
                                     "H_constraint" : False,
                                     "denom_bond"   : 5.0e-3 * _LENGTH * error_scale_geo,
                                     "denom_angle"  : 8.0e-0 * _ANGLE * error_scale_geo,
-                                    "denom_torsion" : 2.0e+1 * _ANGLE * error_scale_geo,
+                                    "denom_torsion" : 1.0e+1 * _ANGLE * error_scale_geo,
                                   }
                 if target_dict_geo["structures"]:
                     sys.add_target(GeoTarget, target_dict_geo)
