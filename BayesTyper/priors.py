@@ -73,22 +73,26 @@ class BaseBounds(object):
                 for atom_list, sys_idx in zip(atom_list_all[idxs], system_idx_list[idxs]):
                     atom_list     = atom_list.tolist()
                     atom_list_set = set()
-                    for _ in range(N_atoms):
-                        a = atom_list.pop(0)
-                        atom_list.append(a)
-                        atom_list_set.add(tuple(atom_list))
-                    if N_atoms == 3:
-                        a = atom_list.pop(1)
-                        atom_list.append(a)
-                        for _ in range(N_atoms):
-                            a = atom_list.pop(0)
-                            atom_list.append(a)
-                            atom_list_set.add(tuple(atom_list))
-                    match_idx  = None
+                    atom_list_set.add(tuple(atom_list))
+                    atom_list_set.add(tuple(atom_list[::-1]))
+                    #for _ in range(N_atoms):
+                    #    a = atom_list.pop(0)
+                    #    atom_list.append(a)
+                    #    atom_list_set.add(tuple(atom_list))
+                    #if N_atoms == 3:
+                    #    a = atom_list.pop(1)
+                    #    atom_list.append(a)
+                    #    for _ in range(N_atoms):
+                    #        a = atom_list.pop(0)
+                    #        atom_list.append(a)
+                    #        atom_list_set.add(tuple(atom_list))
+                    match_idx  = -1
                     for smirks_idx, matches in enumerate(matches_list[sys_idx]):
                         intersect = matches.intersection(atom_list_set)
                         if len(intersect) > 0:
                             match_idx = smirks_idx
+                    if match_idx == -1:
+                        continue
                     for i in range(pvec.parameters_per_force_group):
                         _min = min(
                             lower_list[type_i][i], 
@@ -743,7 +747,7 @@ class MultiTorsionBounds(BaseBounds):
     def __init__(self, max_periodicity):
 
         bounds_list = [
-            ["[*:1]~[*:2]~[*:3]~[*:4]" , [0. for _ in range(max_periodicity)]],
+            ["[*]~[*]~[*]~[*]" , [0. for _ in range(max_periodicity)]],
             ]
 
         smirks = list()
@@ -757,6 +761,19 @@ class MultiTorsionBounds(BaseBounds):
             upper.append(central)
 
         super().__init__(upper, lower, smirks)
+
+    def get_bounds(self, pvec):
+
+        lower_list = list()
+        upper_list = list()
+        for _ in range(pvec.force_group_count):
+            lower_list.append(list())
+            upper_list.append(list())
+            for _ in range(pvec.parameters_per_force_group):
+                lower_list[-1].append(0.)
+                upper_list[-1].append(0.)
+
+        return lower_list, upper_list
 
 
 class LogBasePrior(object):
