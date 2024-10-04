@@ -104,7 +104,8 @@ def get_plots(
     skip_optgeo=False,
     skip_vib=False,
     skip_offeq=False,
-    enecutoff5=False):
+    enecutoff5=False,
+    vib_minimize=True,):
 
     import pickle
     import numpy as np
@@ -327,7 +328,8 @@ def get_plots(
                     xyz *= _LENGTH_AU
                 engine = OpenmmEngine(sys.openmm_system, xyz)
                 engine.set_xyz(xyz)
-                #engine.minimize()
+                if vib_minimize:
+                    engine.minimize()
                 hessian_mm = engine.compute_hessian() / unit.constants.AVOGADRO_CONSTANT_NA
                 freqs_mm, modes_mm = compute_freqs(hessian_mm, masses)
                 freqs_qm, modes_qm = compute_freqs(hessian_qm, masses)
@@ -962,6 +964,7 @@ class SystemManagerLoader(object):
         force_projection = False,
         reference_to_lowest = True,
         remove_types_manager_list = list(),
+        vib_minimize = True,
         verbose = False,
         ):
 
@@ -987,6 +990,7 @@ class SystemManagerLoader(object):
         self.add_units           = add_units
         self.force_projection    = force_projection
         self.reference_to_lowest = reference_to_lowest
+        self.vib_minimize        = vib_minimize
         self.verbose             = verbose
 
         self.rdmol_dict = dict()
@@ -1118,6 +1122,7 @@ class SystemManagerLoader(object):
             self.force_projection,
             self.reference_to_lowest,
             self._remove_types_manager_list,
+            self.vib_minimize,
             verbose=False)
 
         for smi in smiles_list:
@@ -1162,6 +1167,7 @@ def generate_systemmanager(
     force_projection=False,
     reference_to_lowest=True,
     remove_types_manager_list=list(),
+    vib_minimize=True,
     verbose=False):
 
     __doc__ = """
@@ -1395,8 +1401,7 @@ def generate_systemmanager(
             if len(final_geo_list) > 0 and len(hessian_list) > 0:
                 target_dict_nm = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
                                    "rdmol"        : sys_target.rdmol,
-                                   #"minimize"     : True, 
-                                   "minimize"     : False, 
+                                   "minimize"     : vib_minimize, 
                                    "H_constraint" : False,
                                    "hessian"      : [TO_HESSIAN_UNIT(_h) for _h in hessian_list],
                                    "denom_freq"   : 200. * _WAVENUMBER * error_scale_vib, 
