@@ -738,7 +738,7 @@ class AngleBounds(BaseBounds):
         return super().apply_pvec(pvec, [0,1])
 
 
-def MultiTorsionBounds(BaseBounds):
+class MultiTorsionBounds(BaseBounds):
 
     def __init__(self, max_periodicity):
 
