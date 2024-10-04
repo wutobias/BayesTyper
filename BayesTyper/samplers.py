@@ -624,7 +624,7 @@ class ForceFieldSampler(BaseOptimizer):
                     "logQ_fwd", logQ_fwd, "\n",
                     )
 
-        elif death:
+        #elif death:
             
 
         is_accepted = False
