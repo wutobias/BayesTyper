@@ -743,7 +743,7 @@ class MultiTorsionBounds(BaseBounds):
     def __init__(self, max_periodicity):
 
         bounds_list = [
-            ["[*:1]~[*:2]~[*:3]~[*:4]" , *[0. for _ in range(max_periodicity)]],
+            ["[*:1]~[*:2]~[*:3]~[*:4]" , [0. for _ in range(max_periodicity)]],
             ]
 
         smirks = list()
@@ -751,7 +751,7 @@ class MultiTorsionBounds(BaseBounds):
         upper  = list()
         for bounds in bounds_list:
             smi = bounds[0]
-            central = bounds[1:]
+            central = bounds[1]
             smirks.append(smi)
             lower.append(central)
             upper.append(central)
