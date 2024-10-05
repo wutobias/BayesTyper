@@ -1434,6 +1434,10 @@ class BaseOptimizer(object):
         import copy
         import numpy as np
 
+        if int(N_sys_per_batch) >= int(self.N_all_systems):
+            N_batches = 1
+            N_sys_per_batch = self.N_all_systems
+
         if cluster_systems:
             centroid, label = cluster.vq.kmeans2(
                     self.obs, N_sys_per_batch, minit='points', iter=100)
@@ -1459,9 +1463,6 @@ class BaseOptimizer(object):
                 self.N_all_systems, 
                 dtype=int
                 )
-
-            if not (N_sys_per_batch < self.N_all_systems):
-                N_batches = 1
 
             system_idx_list_batch = tuple()
             for _ in range(N_batches):
@@ -2045,7 +2046,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
-                    pvec_idx_min = [mngr_idx_main],
+                    #pvec_idx_min = [mngr_idx_main],
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list,
@@ -2389,7 +2390,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bitvec_type_list = bitvec_type_list_id,
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,
-                                    pvec_idx_min = [mngr_idx],
+                                    #pvec_idx_min = [mngr_idx],
                                     local_targets = False,
                                     bounds_penalty = self.bounds_penalty_list,
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
