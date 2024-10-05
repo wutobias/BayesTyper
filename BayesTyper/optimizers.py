@@ -784,12 +784,26 @@ def validate_FF(
 
                     found_improvement = True
 
+                    if verbose:
+                        if found_improvement:
+                            print(
+                                    f"Found Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
+
             for mngr_idx in range(N_mngr):
                 pvec_list_cp[mngr_idx].reset(
                     pvec_list_initial[mngr_idx])
                 bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
                     bitvec_type_list_list_initial[mngr_idx])
         
+    if verbose:
+        if found_improvement:
+            print(
+                    f"Found Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
+        else:
+            print(
+                    f"Found no Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
+
+
     _best_pvec_list = [pvec.vector_k[:].copy() for pvec in best_pvec_list]
 
     return found_improvement, _best_pvec_list, best_bitvec_type_list_list, best_AIC, best_ast
@@ -2031,7 +2045,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
-                    #pvec_idx_min = [mngr_idx_main],
+                    pvec_idx_min = [mngr_idx_main],
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list,
@@ -2375,7 +2389,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     bitvec_type_list = bitvec_type_list_id,
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,
-                                    #pvec_idx_min = [mngr_idx],
+                                    pvec_idx_min = [mngr_idx],
                                     local_targets = False,
                                     bounds_penalty = self.bounds_penalty_list,
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
