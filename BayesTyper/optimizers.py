@@ -1,11 +1,7 @@
 import numpy as np
-from scipy import stats
 import copy
 
-from .kernels import LogJumpKernel
 from .vectors import ForceFieldParameterVector
-from .vectors import SmartsForceFieldParameterVector
-from .likelihoods import LogGaussianLikelihood
 from .likelihoods import LikelihoodVectorized
 from .bitvector_typing import BitSmartsManager
 
@@ -502,6 +498,13 @@ def minimize_FF(
                 "Final func value:",
                 best_f,
                 )
+            from .tools import benchmark_systems
+            print(
+                "SYSTEM BENCHMARK DURING MINIMIZATION")
+            print(
+                "====================================")
+            benchmark_systems(
+                pvec_min_list[0].parameter_manager.system_list)
 
         _pvec_list_cp = [pvec.vector_k[:].copy() for pvec in pvec_list_cp]
         if get_timing:
@@ -799,6 +802,19 @@ def validate_FF(
     #    else:
     #        print(
     #                f"Found no Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
+    if verbose:
+        from .tools import benchmark_systems
+        print(
+            "SYSTEM BENCHMARK DURING VALIDATION")
+        print(
+            "==================================")
+        for mngr_idx in range(N_mngr):
+            pvec_list_cp[mngr_idx].reset(
+                best_pvec_list[mngr_idx])
+        benchmark_systems(
+            pvec_list_cp[0].parameter_manager.system_list)
+
+    del pvec_list_cp
 
     _best_pvec_list = [pvec.vector_k[:].copy() for pvec in best_pvec_list]
 
@@ -2270,7 +2286,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                             parm_penalty = 1.,
                             bounds_penalty = self.bounds_penalty_list,
                             N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
-                            use_global_opt = _USE_GLOBAL_OPT)
+                            use_global_opt = _USE_GLOBAL_OPT,
+                            verbose = self.verbose)
                         minimize_initial_worker_id_dict[worker_id] = sys_idx_pair
 
                     if self.verbose:
@@ -2558,6 +2575,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 best_selection = max(
                     best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
+                sys_idx_list_validation_all = list()
+                for sys_idx_list in self.sys_idx_list_validation:
+                    sys_idx_list_validation_all.extend(
+                        list(sys_idx_list))
                 for mngr_idx in range(self.N_mngr):
                     candidate_idx = best_selection[mngr_idx]
                     pvec_list = pvec_list_query[candidate_idx]
@@ -2565,7 +2586,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     if self.verbose:
                         [old_pvec], _ = self.generate_parameter_vectors(
                             mngr_idx_list=[mngr_idx],
-                            system_idx_list=self.sys_idx_list_validation[0])
+                            system_idx_list=sys_idx_list_validation_all)
 
                     self.update_best(
                         mngr_idx,
@@ -2588,6 +2609,17 @@ class ForceFieldOptimizer(BaseOptimizer):
                             vec_str = ",".join([str(v) for v in vec])
                             print(
                                 f"{idx} : {vec_str} {sma}")
+                if self.verbose:
+                    print(
+                        "SYSTEM BENCHMARK FINAL")
+                    print(
+                        "======================")
+                    from .tools import benchmark_systems
+                    [_pvec], _ = self.generate_parameter_vectors(
+                        mngr_idx_list=[0],
+                        system_idx_list=sys_idx_list_validation_all)
+                    benchmark_systems(
+                        _pvec.parameter_manager.system_list)
 
                 self.split_iteration_idx += 1
 

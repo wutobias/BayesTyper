@@ -51,6 +51,76 @@ get_atomic_weight = Chem.GetPeriodicTable().GetAtomicWeight
 get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 
+def benchmark_systems(
+    system_list, KEY_LIST = ["rmse"], print_output=True, only_global=False):
+
+    from BayesTyper import targets
+    from BayesTyper import engines
+    import ray
+
+    tc = targets.TargetComputer(system_list)
+    openmm_system_dict = dict()
+    for i, sys in enumerate(system_list):
+        openmm_system_dict[sys.name,0] = sys.openmm_system
+    worker_id = tc(openmm_system_dict, True, False)
+
+    logP, results_dict = ray.get(worker_id)
+
+    if print_output:
+        output_str_list = list()
+        OVERALL_STATS = dict()
+        for sys_key in results_dict:
+            sysname, sys_idx = sys_key
+            if not only_global:
+                output_str_list.append(f"{sysname}")
+                output_str_list.append("".join(["="]*len(sysname)))
+                output_str_list.append("")
+            ### Get alphabetical sorting
+            target_name_dict = dict()
+            for target_key in results_dict[sys_key]:
+                target_name, target_idx = target_key
+                target_name_dict[target_key] = target_name
+            sorted_key_list = sorted(
+                target_name_dict.keys(), key=target_name_dict.get)
+            for target_key in sorted_key_list:
+                target_name, target_idx = target_key
+                if not only_global:
+                    output_str_list.append(" "*4 + target_name)
+                    output_str_list.append(" "*4 + "".join(["~"]*len(target_name)))
+                for error_key in results_dict[sys_key][target_key]:
+                    check  = any(
+                        [error_key.startswith(v) for v in KEY_LIST])
+                    if check:
+                        val = results_dict[sys_key][target_key][error_key]
+                        error_name = error_key.replace("_"," ").upper()
+                        if not only_global:
+                            output_str_list.append(" "*8 + f"{error_name:15s}" + f"{val:4.2f}")
+                        if target_name not in OVERALL_STATS:
+                            OVERALL_STATS[target_name] = dict()
+                        if error_key not in OVERALL_STATS[target_name]:
+                            OVERALL_STATS[target_name][error_name] = list()
+                        OVERALL_STATS[target_name][error_name].append(val)     
+                if not only_global:
+                    output_str_list.append("")
+
+        import numpy as np
+        for target_name in OVERALL_STATS:
+            output_str_list.append(
+                "GLOBAL ESTIMATE FOR " + target_name)
+            output_str_list.append(
+                "".join(["="]*20) + "".join(["="]*len(target_name)))
+            for error_name in OVERALL_STATS[target_name]:
+                val  = np.mean(OVERALL_STATS[target_name][error_name])
+                output_str_list.append(
+                    " "*8 + f"{error_name:15s}" + f"{val:4.2f}")
+            output_str_list.append("")
+        print(
+            "\n".join(output_str_list))
+
+    return results_dict
+
+
+
 def write_pdb(system_list, optdataset_dict):
 
     from BayesTyper.engines import OpenmmEngine

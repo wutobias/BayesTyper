@@ -201,17 +201,33 @@ def run_normalmodetarget(
     rss  = 0.
     diff = 0.
 
+    if not unit.is_quantity(target_strcs[0]):
+        _xyz = target_strcs[0] * _LENGTH
+    else:
+        _xyz = target_strcs[0]
+
+    if unit.is_quantity(masses):
+        masses = masses.value_in_unit(_ATOMIC_MASS)
+
+    if unit.is_quantity(denom_frq):
+        denom_frq = denom_frq.value_in_unit(_WAVENUMBER)
+
     engine  = OpenmmEngine(
         openmm_system,
-        target_strcs[0] * _LENGTH
-        )
+        _xyz)
 
     N_strcs = len(target_strcs)
     N_freqs = len(target_freqs)
     N_success = 0
+    freq_diff_list = list()
     for strc_idx in range(N_strcs):
 
-        engine.xyz = target_strcs[strc_idx] * _LENGTH
+        if not unit.is_quantity(target_strcs[strc_idx]):
+            _xyz = target_strcs[strc_idx] * _LENGTH
+        else:
+            _xyz = target_strcs[strc_idx]
+
+        engine.xyz = _xyz
 
         success = True
         if minimize:
@@ -220,11 +236,13 @@ def run_normalmodetarget(
             N_success += 1
             hessian  = engine.compute_hessian()
             ### Remove 1/mol
-            hessian      /= unit.constants.AVOGADRO_CONSTANT_NA
+            hessian     /= unit.constants.AVOGADRO_CONSTANT_NA
             freqs, modes = compute_freqs(hessian, masses*_ATOMIC_MASS)
             freqs        = freqs.value_in_unit(_WAVENUMBER)
             ### re-assign frequencies by computing optimal overlap
             ### between modes
+            if unit.is_quantity(target_freqs[strc_idx]):
+                target_freqs[strc_idx] = target_freqs[strc_idx].value_in_unit(_WAVENUMBER)
             _diff    = abs(freqs - target_freqs[strc_idx])
             _rss     = _diff**2 * (1./denom_frq)**2
             if permute:
@@ -234,13 +252,14 @@ def run_normalmodetarget(
                 freqs = freqs[col_ind]
 
             _diff    = abs(freqs - target_freqs[strc_idx])
-            _rss     = _diff**2 * (1./denom_frq)**2
+            _rss     = _diff**2 / denom_frq**2
 
             diff_dict[strc_idx] = {i:f for i,f in enumerate(_diff*_WAVENUMBER)}
             rss_dict[strc_idx]  = {i:f for i,f in enumerate(_rss)}
 
             rss  += np.sum(_rss)
             diff += np.sum(_diff)
+            freq_diff_list.extend(_diff.tolist())
 
     if N_success == N_strcs:
         diff *= _WAVENUMBER
@@ -253,7 +272,11 @@ def run_normalmodetarget(
     log_norm_factor = N_freqs * np.log(denom_frq)
 
     if return_results_dict:
+        freq_diff_list = np.array(freq_diff_list)
         results_dict = {
+            "mae"       : np.mean(np.abs(freq_diff_list)),
+            "mse"       : np.mean(freq_diff_list),
+            "rmse"      : np.sqrt(np.mean(freq_diff_list**2)),
             "diff"      : diff,
             "diff_dict" : diff_dict,
             "rss_dict"  : rss_dict}
@@ -270,10 +293,22 @@ def run_geotarget(
     ### a copy.deepcopy copy from openmm_system,
     ### top and target_strc before doing anything
     ### with them.
+    if not unit.is_quantity(target_strcs[0]):
+        _xyz = target_strcs[0] * _LENGTH
+    else:
+        _xyz = target_strcs[0]
+
+    if unit.is_quantity(denom_bond):
+        denom_bond = denom_bond.value_in_unit(_LENGTH)
+    if unit.is_quantity(denom_angle):
+        denom_angle = denom_angle.value_in_unit(_ANGLE)
+    if unit.is_quantity(denom_torsion):
+        denom_torsion = denom_torsion.value_in_unit(_ANGLE)
+
     engine  = OpenmmEngine(
         openmm_system,
-        target_strcs[0] * _LENGTH
-        )
+        _xyz)
+
     N_success = 0
 
     rss_bond    = 0.0
@@ -298,8 +333,16 @@ def run_geotarget(
     N_angles    = len(zmatrix) - 2
     N_torsions  = len(zmatrix) - 3
 
+    diff_bonds_list    = list()
+    diff_angles_list   = list()
+    diff_torsions_list = list()
     for strc_idx in range(N_strcs):
-        engine.xyz = target_strcs[strc_idx] * _LENGTH
+        if not unit.is_quantity(target_strcs[strc_idx]):
+            _xyz = target_strcs[strc_idx] * _LENGTH
+        else:
+            _xyz = target_strcs[strc_idx]
+
+        engine.xyz = _xyz
 
         success = engine.minimize()
 
@@ -317,31 +360,50 @@ def run_geotarget(
                 continue
             ### Bonds
             if z_idx > 0:
+                ### These unit checks are here to guarantee
+                ### backwards compatibility and have an extra
+                ### layer of unit sanity checking.
+                if unit.is_quantity(target_zm[z_idx][0]):
+                    target_val = target_zm[z_idx][0].value_in_unit(_LENGTH)
+                else:
+                    target_val = target_zm[z_idx][0]
                 ### If we have constraint bonds to H atoms, we don't
                 ### want to include the bond length of those bonds.
                 if H_constraint:
                     if not z_idx in H_list:
-                        diff       = abs(target_zm[z_idx][0] - z_value[0])
+                        diff       = abs(target_val - z_value[0])
                         diff_bond += diff
                         rss_bond  += diff**2
+                        diff_bonds_list.append(diff)
                 else:
-                    diff       = abs(target_zm[z_idx][0] - z_value[0])
+                    diff       = abs(target_val - z_value[0])
                     diff_bond += diff
                     rss_bond  += diff**2
+                    diff_bonds_list.append(diff)
             ### Angles
             if z_idx > 1:
-                diff        = abs(target_zm[z_idx][1] - z_value[1])
+                if unit.is_quantity(target_zm[z_idx][1]):
+                    target_val = target_zm[z_idx][1].value_in_unit(_ANGLE)
+                else:
+                    target_val = target_zm[z_idx][1]
+                diff        = abs(target_val - z_value[1])
                 diff_angle += diff
                 rss_angle  += diff**2
+                diff_angles_list.append(diff)
             ### Torsions
             if z_idx > 2 and z_idx not in dihedral_skip:
-                diff = abs(target_zm[z_idx][2] - z_value[2]) * _ANGLE
+                if unit.is_quantity(target_zm[z_idx][2]):
+                    target_val = target_zm[z_idx][2].value_in_unit(_ANGLE)
+                else:
+                    target_val = target_zm[z_idx][2]
+                diff = abs(target_val - z_value[2]) * _ANGLE
                 if diff > 180.*unit.degree:
                     diff = diff - 360.*unit.degree
                     diff = abs(diff)
                 diff = diff.value_in_unit(_ANGLE)
                 diff_torsion += diff
                 rss_torsion  += diff**2
+                diff_torsions_list.append(diff)
 
     if N_success != N_strcs:
         rss_bond     = np.inf
@@ -386,7 +448,23 @@ def run_geotarget(
     log_norm_factor += N_torsions * np.log(denom_torsion)
 
     if return_results_dict:
+        diff_bonds_list    = np.array(diff_bonds_list)
+        diff_angles_list   = np.array(diff_angles_list)
+        diff_torsions_list = np.array(diff_torsions_list)
+
         results_dict = {
+            "mae_bond"     : np.mean(np.abs(diff_bonds_list)),
+            "mse_bond"     : np.mean(diff_bonds_list),
+            "rmse_bond"    : np.sqrt(np.mean(diff_bonds_list**2)),
+
+            "mae_angle"    : np.mean(np.abs(diff_angles_list)),
+            "mse_angle"    : np.mean(diff_angles_list),
+            "rmse_angle"   : np.sqrt(np.mean(diff_angles_list**2)),
+
+            "mae_torsion"  : np.mean(np.abs(diff_torsions_list)),
+            "mse_torsion"  : np.mean(diff_torsions_list),
+            "rmse_torsion" : np.sqrt(np.mean(diff_torsions_list**2)),
+
             "rss_bond"     : rss_bond,
             "rss_angle"    : rss_angle,
             "rss_torsion"  : rss_torsion,
@@ -406,9 +484,20 @@ def run_energytarget(
     denom_ene, minimize, restraint_atom_indices=list(), restraint_k=list(),
     reference_to_lowest=True, ene_weighting=True, return_results_dict=False):
 
+    if not unit.is_quantity(target_strcs[0]):
+        _xyz = target_strcs[0] * _LENGTH
+    else:
+        _xyz = target_strcs[0]
+
+    if unit.is_quantity(target_energies):
+        target_energies = target_energies.value_in_unit(_ENERGY_PER_MOL)
+
+    if unit.is_quantity(denom_ene):
+        denom_ene = denom_ene.value_in_unit(_ENERGY_PER_MOL)
+
     engine  = OpenmmEngine(
         openmm_system,
-        target_strcs[0] * _LENGTH)
+        _xyz)
 
     diff_dict = dict()
     rss_dict  = dict()
@@ -479,8 +568,12 @@ def run_energytarget(
 
     energy_list = np.zeros(N_strcs)
     for strc_idx in range(N_strcs):
-        target_strc = target_strcs[strc_idx]
-        engine.xyz  = target_strc * _LENGTH
+        if not unit.is_quantity(target_strcs[strc_idx]):
+            _xyz = target_strcs[strc_idx] * _LENGTH
+        else:
+            _xyz = target_strcs[strc_idx]
+
+        engine.xyz = _xyz
         if minimize:
             engine.minimize()
         energy_list[strc_idx] = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
@@ -493,8 +586,10 @@ def run_energytarget(
 
     _diff = delta_energies - delta_target_energies
     if not reference_to_lowest:
-        _diff /= float(N_strcs)
-    _rss  = _diff**2 * target_denom / denom_ene**2
+        _diff_avg = _diff / float(N_strcs)
+        _rss = _diff_avg**2 * target_denom / denom_ene**2
+    else:
+        _rss  = _diff**2 * target_denom / denom_ene**2
 
     for strc_idx in range(N_strcs):
         if reference_to_lowest:
@@ -514,6 +609,9 @@ def run_energytarget(
 
     if return_results_dict:
         results_dict = {
+            "mae"          : np.mean(np.abs(_diff)),
+            "mse"          : np.mean(_diff),
+            "rmse"         : np.sqrt(np.mean(_diff**2)),
             "vals_dict"    : vals_dict,
             "rss_dict"     : rss_dict,
             "diff_dict"    : diff_dict,
@@ -528,9 +626,17 @@ def run_forcematchingtarget(
 
     import copy
 
+    if not unit.is_quantity(target_strcs[0]):
+        _xyz = target_strcs[0] * _LENGTH
+    else:
+        _xyz = target_strcs[0]
+
+    if unit.is_quantity(denom_force):
+        denom_force = denom_force.value_in_unit(_FORCE)
+
     engine  = OpenmmEngine(
         openmm_system,
-        target_strcs[0] * _LENGTH)
+        _xyz)
 
     diff_dict = dict()
     rss_dict  = dict()
@@ -540,10 +646,15 @@ def run_forcematchingtarget(
 
     N_atoms = len(target_strcs[0])
     N_strcs = len(target_strcs)
+    diff_list = list()
     for strc_idx in range(N_strcs):
         target_strc  = target_strcs[strc_idx]
         target_force = target_forces[strc_idx]
-        engine.xyz   = target_strc * _LENGTH
+        if not unit.is_quantity(target_strcs[strc_idx]):
+            _xyz = target_strcs[strc_idx] * _LENGTH
+        else:
+            _xyz = target_strcs[strc_idx]
+        engine.xyz   = _xyz
         forces       = engine.forces.value_in_unit(_FORCE).flatten()
         ### This same as computing length of diff vector
         ### and then taking square
@@ -556,7 +667,9 @@ def run_forcematchingtarget(
         rss_dict[strc_idx]  = _rss.tolist()
 
         rss  += np.sum(rss)
-        diff += np.sum(diff)
+        diff += np.sum(_diff)
+
+        diff_list.extend(_diff.flatten().tolist())
 
     diff *= _FORCE
 
@@ -565,7 +678,11 @@ def run_forcematchingtarget(
     del engine
 
     if return_results_dict:
+        diff_list = np.array(diff_list)
         results_dict = {
+            "mae"          : np.mean(np.abs(diff_list)),
+            "mse"          : np.mean(diff_list),
+            "rmse"         : np.sqrt(np.mean(diff_list**2)),
             "rss_dict"     : rss_dict,
             "diff_dict"    : diff_dict,
             "diff"         : diff}
@@ -582,9 +699,14 @@ def run_forceprojectionmatchingtarget(
     ### a copy.deepcopy copy from openmm_system,
     ### top and target_strc before doing anything
     ### with them.
+    if not unit.is_quantity(target_strcs[0]):
+        _xyz = target_strcs[0] * _LENGTH
+    else:
+        _xyz = target_strcs[0]
+
     engine  = OpenmmEngine(
         openmm_system,
-        target_strcs[0] * _LENGTH)
+        _xyz)
 
     rss_bond    = 0.0
     rss_angle   = 0.0
@@ -606,12 +728,19 @@ def run_forceprojectionmatchingtarget(
 
     N_strcs = len(target_strcs)
     H_constraint = len(H_list) > 0
+    diff_bonds_list    = list()
+    diff_angles_list   = list()
+    diff_torsions_list = list()
     for strc_idx in range(N_strcs):
 
-        target_strc  = target_strcs[strc_idx]
         target_force = target_force_projection[strc_idx]
-        engine.xyz   = target_strc * _LENGTH
-        forces       = engine.forces.value_in_unit(_FORCE).flatten()
+        if not unit.is_quantity(target_strcs[strc_idx]):
+            _xyz = target_strcs[strc_idx] * _LENGTH
+        else:
+            _xyz = target_strcs[strc_idx]
+
+        engine.xyz = _xyz
+        forces     = engine.forces.value_in_unit(_FORCE).flatten()
 
         B_flat  = B_flat_list[strc_idx]
         force_q = build_grad_projection(
@@ -636,16 +765,19 @@ def run_forceprojectionmatchingtarget(
                     diff       = abs(target_force[z_idx][0] - force_values[0])
                     diff_bond += diff
                     rss_bond  += diff**2
+                diff_bonds_list.append(diff)
             ### Angles
             if z_idx > 1:
                 diff        = abs(target_force[z_idx][1] - force_values[1])
                 diff_angle += diff
                 rss_angle  += diff**2
+                diff_angles_list.append(diff)
             ### Torsions
             if z_idx > 2:
                 diff = abs(target_force[z_idx][2] - force_values[2])
                 diff_torsion += diff
                 rss_torsion  += diff**2
+                diff_torsions_list.append(diff)
 
     diff_bond    *= _LENGTH
     diff_angle   *= _ANGLE
@@ -679,7 +811,24 @@ def run_forceprojectionmatchingtarget(
     log_norm_factor += N_torsions * np.log(denom_torsion)
 
     if return_results_dict:
+
+        diff_bonds_list    = np.array(diff_bonds_list)
+        diff_angles_list   = np.array(diff_angles_list)
+        diff_torsions_list = np.array(diff_torsions_list)
+
         results_dict = {
+            "mae_bond"     : np.mean(np.abs(diff_bonds_list)),
+            "mse_bond"     : np.mean(diff_bonds_list),
+            "rmse_bond"    : np.sqrt(np.mean(diff_bonds_list**2)),
+
+            "mae_angle"    : np.mean(np.abs(diff_angles_list)),
+            "mse_angle"    : np.mean(diff_angles_list),
+            "rmse_angle"   : np.sqrt(np.mean(diff_angles_list**2)),
+
+            "mae_torsion"  : np.mean(np.abs(diff_torsions_list)),
+            "mse_torsion"  : np.mean(diff_torsions_list),
+            "rmse_torsion" : np.sqrt(np.mean(diff_torsions_list**2)),
+
             "rss_bond"     : rss_bond,
             "rss_angle"    : rss_angle,
             "rss_torsion"  : rss_torsion,
@@ -715,15 +864,12 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
         args_dict_list = target_dict[sys_name]
         N_tgt = len(args_dict_list)
         if return_results_dict:
-            results_all_dict[key] = list()
+            results_all_dict[key] = dict()
+            results_dict = dict()
         else:
             results_all_dict[key] = 0.
         openmm_system = openmm_system_dict[key]
-            
-        if return_results_dict:
-            results_dict              = dict()
-            results_dict["rss"]       = dict()
-            results_dict["log_norm_factor"] = dict()
+
         for target_idx in range(N_tgt):
             target_args, target_name = args_dict_list[target_idx]
             target_method = target_method_dict[target_name]
@@ -731,15 +877,16 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
                 results = target_method(
                     openmm_system, **target_args, return_results_dict=return_results_dict)
                 if return_results_dict:
-                    rss, log_norm_factor, results_dict = results
-                    logP_likelihood += -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
-                    results_dict["rss"][target_idx] = results_dict["rss"]
-                    results_dict["log_norm_factor"][target_idx] = log_norm_factor
+                    rss, log_norm_factor, _results_dict = results
+                    _logP_likelihood = -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
+                    logP_likelihood += _logP_likelihood
+                    results_dict[(target_name,target_idx)] = _results_dict
                 else:
                     rss, log_norm_factor = results
                     _logP_likelihood = -log_norm_factor - 0.5 * np.log(2.*np.pi) - 0.5 * rss
                     logP_likelihood += _logP_likelihood
                     results_all_dict[key] += _logP_likelihood
+                
             except:
                 if _VERBOSE:
                     import traceback
@@ -747,11 +894,10 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
                 logP_likelihood = -np.inf
                 results_all_dict[key] = -np.inf
                 if return_results_dict:
-                    results_dict["rss"][target_idx] = -np.inf
-                    results_dict["log_norm_factor"][target_idx] = 0.
+                    results_dict[(target_name,target_idx)] = dict()
 
         if return_results_dict:
-            results_all_dict[key].append(results_dict)
+            results_all_dict[key] = results_dict
 
     return logP_likelihood, results_all_dict
 
@@ -891,7 +1037,8 @@ class Target(object):
 
         self.target_strcs = list()
         for target_strc in target_dict["structures"]:
-            target_strc = target_strc.value_in_unit(_LENGTH)
+            if unit.is_quantity(target_strc):
+                target_strc = target_strc.value_in_unit(_LENGTH)
             self.target_strcs.append(np.array(target_strc))
         self.target_strcs = np.array(self.target_strcs)
 
@@ -1056,9 +1203,10 @@ class GeoTarget(Target):
 
         self.target_zm = list()
         for strc_idx in range(self.N_strcs):
-            self.target_zm.append(
-                self.zm.build_z_crds(
-                    self.target_strcs[strc_idx]*_LENGTH))
+            _target_zm = self.zm.build_z_crds(
+                    self.target_strcs[strc_idx]*_LENGTH,
+                    with_units=False)
+            self.target_zm.append(_target_zm)
             for z_idx in self.zm.z:
                 if z_idx > 2:
                     aidxs = self.zm.z[z_idx]
@@ -1174,10 +1322,14 @@ class NormalModeTarget(Target):
         args = {
             "target_strcs"    : self.target_strcs,
             "target_freqs"    : self.target_freqs,
-            "target_modes"    : self.target_modes,
+            ### We dont want to get the target modes
+            ### this is only necessary with permute=True.
+            ### However, this does not improve results.
+            "target_modes"    : list(),
             "minimize"        : self.minimize,
             "masses"          : self.masses,
-            "denom_frq"       : self.denom_frq}
+            "denom_frq"       : self.denom_frq,
+            "permute"         : False}
 
         return args
 
