@@ -234,7 +234,7 @@ def run_normalmodetarget(
             success = engine.minimize()
         if success:
             N_success += 1
-            hessian  = engine.compute_hessian()
+            hessian    = engine.compute_hessian()
             ### Remove 1/mol
             hessian     /= unit.constants.AVOGADRO_CONSTANT_NA
             freqs, modes = compute_freqs(hessian, masses*_ATOMIC_MASS)
@@ -243,8 +243,8 @@ def run_normalmodetarget(
             ### between modes
             if unit.is_quantity(target_freqs[strc_idx]):
                 target_freqs[strc_idx] = target_freqs[strc_idx].value_in_unit(_WAVENUMBER)
-            _diff    = abs(freqs - target_freqs[strc_idx])
-            _rss     = _diff**2 * (1./denom_frq)**2
+            _diff = abs(freqs - target_freqs[strc_idx])
+            _rss  = _diff**2 * (1./denom_frq)**2
             if permute:
                 overlap = np.einsum('ij,ik', target_modes[strc_idx], modes)
                 row_ind, col_ind = optimize.linear_sum_assignment(1.-overlap)
@@ -416,14 +416,14 @@ def run_geotarget(
         
     else:
         ### RSS calcs
-        rss_bond     = 1./(denom_bond)**2    * rss_bond
-        rss_angle    = 1./(denom_angle)**2   * rss_angle
-        rss_torsion  = 1./(denom_torsion)**2 * rss_torsion
+        rss_bond    = 1./(denom_bond)**2    * rss_bond
+        rss_angle   = 1./(denom_angle)**2   * rss_angle
+        rss_torsion = 1./(denom_torsion)**2 * rss_torsion
 
         ### DIFF calcs
-        diff_bond     = diff_bond    * _LENGTH
-        diff_angle    = diff_angle   * _ANGLE
-        diff_torsion  = diff_torsion * _ANGLE
+        diff_bond    = diff_bond    * _LENGTH
+        diff_angle   = diff_angle   * _ANGLE
+        diff_torsion = diff_torsion * _ANGLE
 
     rss_dict['bond']    = rss_bond
     rss_dict['angle']   = rss_angle
@@ -448,9 +448,20 @@ def run_geotarget(
     log_norm_factor += N_torsions * np.log(denom_torsion)
 
     if return_results_dict:
-        diff_bonds_list    = np.array(diff_bonds_list)
-        diff_angles_list   = np.array(diff_angles_list)
-        diff_torsions_list = np.array(diff_torsions_list)
+        if diff_bonds_list:
+            diff_bonds_list = np.array(diff_bonds_list)
+        else:
+            diff_bonds_list = np.zeros(1)
+
+        if diff_angles_list:
+            diff_angles_list = np.array(diff_angles_list)
+        else:
+            diff_angles_list = np.zeros(1)
+
+        if diff_torsions_list:
+            diff_torsions_list = np.array(diff_torsions_list)
+        else:
+            diff_torsions_list = np.zeros(1)
 
         results_dict = {
             "mae_bond"     : np.mean(np.abs(diff_bonds_list)),
@@ -528,7 +539,7 @@ def run_energytarget(
         valids2 = np.where((_lower < delta_target_energies) * ( _upper > delta_target_energies))
         valids3 = np.where(delta_target_energies > _upper)
         target_denom[valids1] = 1.
-        target_denom[valids2] = np.sqrt(_lower + (target_denom[valids2] - _lower)**2)
+        target_denom[valids2] = 1./np.sqrt(_lower + (delta_target_energies[valids2] - _lower)**2)
         target_denom[valids3] = 0.
 
     #_target_denom = target_denom / np.sum(target_denom, axis=0)

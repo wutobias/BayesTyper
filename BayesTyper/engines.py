@@ -310,7 +310,7 @@ class OpenmmEngine(object):
                 ###       here. However, that makes the overall performance *very* slow.
                 self.openmm_simulation.minimizeEnergy(
                     tolerance=tol, 
-                    maxIterations=1000
+                    maxIterations=100000
                     )
             self.update_state()
             ene_min_old = self.pot_ene
@@ -320,7 +320,8 @@ class OpenmmEngine(object):
                     tolerance=crit, 
                     maxIterations=10)
                 self.update_state()
-                if abs(self.pot_ene - ene_min_old) < (crit * 10.):
+                diff = self.pot_ene - ene_min_old
+                if abs(diff) < crit:
                     break
                 ene_min_old = self.pot_ene
                 #E2 = self.pot_ene
