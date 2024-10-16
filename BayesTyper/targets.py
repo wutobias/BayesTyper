@@ -1280,8 +1280,8 @@ class NormalModeTarget(Target):
         ### doi.org/10.26434/chemrxiv.13082561.v2
         self.denom_frq    = 200.
 
-        if "denom_frq" in target_dict:
-            self.denom_frq = target_dict["denom_frq"]
+        if "denom_freq" in target_dict:
+            self.denom_frq = target_dict["denom_freq"]
             self.denom_frq = self.denom_frq.value_in_unit(_WAVENUMBER)
 
         self.target_hessian = list()

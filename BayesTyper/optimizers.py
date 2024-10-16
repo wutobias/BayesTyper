@@ -477,6 +477,7 @@ def minimize_FF(
             print(f"==========")
             print(",".join(vec_str))
 
+    from .constants import _OPT_METHOD
     if use_global_opt:
         #result = optimize.differential_evolution(
         #   _fun,
@@ -486,7 +487,7 @@ def minimize_FF(
                 _fun,
                 x0,
                 minimizer_kwargs={
-                    "method" : "BFGS",
+                    "method" : _OPT_METHOD,
                     "jac"    : _grad},
                 niter=10)
     
@@ -495,8 +496,8 @@ def minimize_FF(
             _fun, 
             x0, 
             jac = _grad, 
-            #method = "Newton-CG",
-            method = "BFGS")
+            method = _OPT_METHOD
+            )
     
     best_x = result.x
     likelihood_func.apply_changes(best_x)
@@ -1079,61 +1080,6 @@ class BaseOptimizer(object):
         return pvec_list, bitvec_type_list
 
 
-    def calc_log_likelihood(
-        self, 
-        system_idx_list = list(),
-        as_dict = False,
-        ):
-        
-        import numpy as np
-
-        if len(system_idx_list) == 0:
-            _system_idx_list = list(range(self.N_systems))
-        else:
-            _system_idx_list = system_idx_list
-
-        worker_id_dict = dict()
-        for sys_idx in _system_idx_list:
-            sys_dict = dict()
-            if isinstance(sys_idx, int):
-                sys = self.system_list[sys_idx]
-                sys_dict[sys.name, sys_idx] = sys.openmm_system
-            else:
-                for _sys_idx in sys_idx:
-                    sys = self.system_list[_sys_idx]
-                    sys_dict[sys.name, _sys_idx] = sys.openmm_system
-            targetcomputer = ray.get(self.targetcomputer_id_dict[sys_idx])
-            worker_id = targetcomputer(sys_dict, False)
-            worker_id_dict[worker_id] = sys_idx
-
-        if as_dict:
-            logP_likelihood = dict()
-        else:
-            logP_likelihood = 0.
-        worker_id_list = list(worker_id_dict.keys())
-        while worker_id_list:
-            worker_id, worker_id_list = ray.wait(
-                worker_id_list)
-            try:
-                _logP_likelihood, _ = ray.get(
-                    worker_id[0], timeout=_TIMEOUT)
-                failed = False
-            except:
-                if _VERBOSE:
-                    import traceback
-                    print(traceback.format_exc())
-                failed = True
-            if not failed:
-                sys_idx = worker_id_dict[worker_id[0]]
-                if as_dict:
-                    logP_likelihood[sys_idx] = _logP_likelihood
-                else:
-                    logP_likelihood += _logP_likelihood
-                del worker_id_dict[worker_id[0]]
-
-        return logP_likelihood
-
-    
     def update_best(
         self,         
         mngr_idx,
@@ -1292,9 +1238,6 @@ class BaseOptimizer(object):
 
         pvec_list_cp, bitvec_list = self.generate_parameter_vectors(as_copy=True)
         N_parms_all  = self.get_number_of_parameters()
-
-        #self.like_traj.append(self.calc_log_likelihood())
-        #self.aic_traj.append(self.calculate_AIC(parm_penalty=parm_penalty))
 
         self.pvec_traj.append(pvec_list_cp)
         self.bitvec_traj.append(bitvec_list)
@@ -1612,58 +1555,6 @@ class ForceFieldOptimizer(BaseOptimizer):
         self.targetcomputer_id_dict = dict()
         self.obs = None
         self.system_manager_loader = None
-
-
-    def calculate_AIC(
-        self,
-        mngr_idx_list = list(),
-        system_idx_list = list(),
-        parm_penalty = 1.,
-        as_dict = False
-        ):
-
-        if len(mngr_idx_list) == 0:
-            _mngr_idx_list = list(range(self.N_mngr))
-        else:
-            _mngr_idx_list = mngr_idx_list
-
-        if len(system_idx_list) == 0:
-            _system_idx_list = list(range(self.N_systems))
-        else:
-            _system_idx_list = system_idx_list
-
-        if as_dict:
-            AIC_score = dict()
-            for sys_idx in _system_idx_list:
-                N_parms_all = 0.
-                if isinstance(sys_idx, int):
-                    _sys_idx_list = [sys_idx]
-                else:
-                    _sys_idx_list = sys_idx
-                N_parms_all = self.get_number_of_parameters(
-                    _mngr_idx_list,
-                    _sys_idx_list
-                    )
-                AIC_score[sys_idx] = 2. * N_parms_all * parm_penalty
-            logP_likelihood = self.calc_log_likelihood(
-                _system_idx_list, 
-                as_dict=True
-                )
-            for sys_idx in _system_idx_list:
-                AIC_score[sys_idx] -= 2. * logP_likelihood[sys_idx]
-
-        else:
-            N_parms_all = self.get_number_of_parameters(
-                _mngr_idx_list,
-                _system_idx_list
-                )
-            AIC_score  = 2. * N_parms_all * parm_penalty
-            AIC_score -= 2. * self.calc_log_likelihood(
-                _system_idx_list,
-                as_dict=False
-                )
-
-        return AIC_score
 
 
     def garbage_collection(
@@ -2431,6 +2322,11 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 pvec_list_query = list()
                 bitvec_type_list_query = list()
+                if not isinstance(self.best_pvec_list, type(None)):
+                    pvec_list_query.append(
+                            self.self.best_pvec_list)
+                    bitvec_type_list_query.append(
+                            self.best_bitvec_type_list)
                 for mngr_idx in range(self.N_mngr):
                     best_ast_sysidx_list = sorted(
                         best_ast_vote_dict[mngr_idx],
