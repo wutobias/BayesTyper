@@ -872,6 +872,7 @@ class ParameterManager(object):
             self.rdmol_list     = list()
 
         else:
+            import copy
             forcecontainer_list_old = copy.deepcopy(self.forcecontainer_list)
             if hasattr(self, "periodicity"):
                 self.__init__(self.periodicity, self.phase)

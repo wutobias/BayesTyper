@@ -326,7 +326,6 @@ def minimize_FF(
     local_targets=False,
     N_sys_per_likelihood_batch=4,
     bounds_penalty=10.,
-    use_scipy=True,
     use_global_opt=_USE_GLOBAL_OPT,
     verbose=False,
     get_timing=False):
@@ -368,7 +367,6 @@ def minimize_FF(
 
         pvec = pvec_list_cp[pvec_idx]
         pvec_min_list.append(pvec)
-
         ### Look for dead parameters
         hist = pvec.force_group_histogram
         for type_i in range(pvec.force_group_count):
@@ -457,166 +455,70 @@ def minimize_FF(
         else:
             return fun(x0), _pvec_list_cp, bitvec_type_list
 
-    if use_scipy:
-        from scipy import optimize
-        _fun = lambda x: fun(x)+penalty(x)
-        _grad = lambda x: grad(x)+grad_penalty(x)
-
-        if verbose:
-            print(
-                "Initial func value:",
-                _fun(x0),
-                )
-                
-        if use_global_opt:
-            #result = optimize.differential_evolution(
-            #   _fun,
-            #   [(-10,10) for _ in x0],
-            #   maxiter=100,)
-            result = optimize.basinhopping(
-                    _fun,
-                    x0,
-                    minimizer_kwargs={
-                        "method" : "BFGS",
-                        "jac"    : _grad},
-                    niter=10)
-        
-        else:
-            result = optimize.minimize(
-                _fun, 
-                x0, 
-                jac = _grad, 
-                #method = "Newton-CG",
-                method = "BFGS")
-        
-        best_x = result.x
-        likelihood_func.apply_changes(best_x)
-        best_f  = _fun(best_x)
-
-        if verbose:
-            print(
-                "Final func value:",
-                best_f,
-                )
-            from .tools import benchmark_systems
-            print(
-                "SYSTEM BENCHMARK DURING MINIMIZATION")
-            print(
-                "====================================")
-            benchmark_systems(
-                pvec_min_list[0].parameter_manager.system_list)
-
-        _pvec_list_cp = [pvec.vector_k[:].copy() for pvec in pvec_list_cp]
-        if get_timing:
-            return best_f, _pvec_list_cp, bitvec_type_list, time.time() - time_start
-        else:
-            return best_f, _pvec_list_cp, bitvec_type_list
-
-    ### Step length
-    alpha_incr = 1.e-2
-    ### Some stopping criteria
-    ### Note 08-12-2022: Decreased grad_tol and fun_tol from 1.e-2 to 1.e-4.
-    ###                  After adding the Jacobian to the grad function in likelihood_func
-    ###                  it seems like the force constants don't really get optimized
-    ###                  anymore. This could be an issue with convergence criteria.
-    grad_tol   = 1.e-2
-    fun_tol    = 1.e-2
-    fun_tol_line_search = 1.e-2
-    max_steps_without_improvement = 5
-    max_line_search_steps = 10
-    max_total_steps = 100
-
-    ### This is the main minimizer algorithm.
-    grad_0 = grad(x0) + grad_penalty(x0)
-    grad_0_norm = np.linalg.norm(grad_0)
-    if grad_0_norm > 0.:
-        grad_0 /= grad_0_norm
-    best_f = fun(x0) + penalty(x0)
-    best_x = x0
-    step_count = 0
-    criteria = 0
-    criteria_msg = ""
-    fun_evals = 0
-    grad_evals = 0
-    steps_without_improvement = 0
+    from scipy import optimize
+    _fun = lambda x: fun(x)+penalty(x)
+    _grad = lambda x: grad(x)+grad_penalty(x)
 
     if verbose:
         print(
             "Initial func value:",
-            best_f,
+            _fun(x0),
             )
-    while True:
-        alpha  = alpha_incr
-        improvement = 0.
-        best_f0 = best_f
-        do_line_search = True
-        line_search_steps = 0
-        while do_line_search:
-            fun_evals += 1
-            xk  = x0 - grad_0 * alpha
-            f_k = fun(xk) + penalty(xk)
-            line_improvement = f_k - best_f
-            ### If we have done less than `max_line_search_steps`
-            ### iterations, just continue.
-            if line_search_steps < max_line_search_steps:
-                if line_improvement < 0.:
-                    best_f = f_k
-                    best_x = xk
-                    improvement = abs(best_f - best_f0)
-            ### If we have already done more than `max_line_search_steps`
-            ### and the objective function still decreases, continue.
-            else:
-                if line_improvement < 0. and abs(line_improvement) > fun_tol_line_search:
-                    best_f = f_k
-                    best_x = xk
-                    improvement = abs(best_f - best_f0)
-                else:
-                    do_line_search = False
-            alpha += alpha_incr
-            line_search_steps += 1
-        x0     = best_x
-        grad_0 = grad(x0) + grad_penalty(x0)
-        grad_0_norm = np.linalg.norm(grad_0)
-        if grad_0_norm > 0.:
-            grad_0 /= grad_0_norm
-        step_count += 1
-        grad_evals += 1
-        if improvement < fun_tol:
-            steps_without_improvement += 1
-        else:
-            steps_without_improvement = 0
+        from .tools import benchmark_systems
+        print(
+            "SYSTEM BENCHMARK BEFORE MINIMIZATION")
+        print(
+            "====================================")
+        benchmark_systems(
+            system_list_cp)
+        for mngr_idx, pvec in enumerate(pvec_list_cp):
+            vec_str = [str(v) for v in pvec.vector_k]
+            print(f"MANAGER {mngr_idx}:")
+            print(f"==========")
+            print(",".join(vec_str))
 
-        if grad_0_norm < grad_tol:
-            criteria += 1
-            criteria_msg += "Stopping due to norm. "
-        if improvement < fun_tol:
-            criteria += 1
-            criteria_msg += "Stopping due to fun value. "
-        if steps_without_improvement > max_steps_without_improvement:
-            criteria += 1
-            criteria_msg += "Stopping due to max steps without improvement. "
-        if step_count > max_total_steps:
-            criteria += 1
-            criteria_msg += "Stopping due to total max steps. "
-        if criteria > 1:
-            if verbose:
-                print(
-                    criteria_msg, "# Fun evals:", fun_evals, "# Grad evals:", grad_evals
-                    )
-            break
-        else:
-            criteria = 0
-            criteria_msg = ""
-
+    if use_global_opt:
+        #result = optimize.differential_evolution(
+        #   _fun,
+        #   [(-10,10) for _ in x0],
+        #   maxiter=100,)
+        result = optimize.basinhopping(
+                _fun,
+                x0,
+                minimizer_kwargs={
+                    "method" : "BFGS",
+                    "jac"    : _grad},
+                niter=10)
+    
+    else:
+        result = optimize.minimize(
+            _fun, 
+            x0, 
+            jac = _grad, 
+            #method = "Newton-CG",
+            method = "BFGS")
+    
+    best_x = result.x
     likelihood_func.apply_changes(best_x)
-    ### Subtract penalty out
-    best_f -= penalty(best_x)
+    best_f  = _fun(best_x)
 
     if verbose:
         print(
             "Final func value:",
             best_f,
             )
+        from .tools import benchmark_systems
+        print(
+            "SYSTEM BENCHMARK AFTER MINIMIZATION")
+        print(
+            "===================================")
+        benchmark_systems(
+            system_list_cp)
+        for mngr_idx, pvec in enumerate(pvec_list_cp):
+            vec_str = [str(v) for v in pvec.vector_k]
+            print(f"MANAGER {mngr_idx}:")
+            print(f"==========")
+            print(",".join(vec_str))
 
     _pvec_list_cp = [pvec.vector_k[:].copy() for pvec in pvec_list_cp]
     if get_timing:
@@ -1094,7 +996,8 @@ class BaseOptimizer(object):
         self, 
         mngr_idx_list = list(),
         system_idx_list = list(),
-        as_copy = False
+        as_copy = False,
+        copy_include_systems = False,
         ):
 
         import copy
@@ -1163,12 +1066,15 @@ class BaseOptimizer(object):
 
             if as_copy:
                 pvec_list.append(
-                    pvec.copy()
-                    )
+                    pvec.copy(include_systems=copy_include_systems))
             else:
                 pvec_list.append(
-                    pvec
-                    )
+                    pvec)
+
+        if as_copy and copy_include_systems:
+            system_list = pvec_list[0].parameter_manager.system_list
+            for i in range(len(pvec_list)):
+                pvec_list[i].parameter_manager.system_list = system_list
 
         return pvec_list, bitvec_type_list
 
@@ -1526,7 +1432,7 @@ class BaseOptimizer(object):
         mngr_idx,
         bitvec_type_list,
         system_idx_list,
-        pvec_start=None,
+        pvec_start_list=None,
         N_trials_gradient=5,
         split_all=False,
         max_on=0.1,
@@ -1543,15 +1449,19 @@ class BaseOptimizer(object):
             mngr_idx,
             system_idx_list
             )
-        [pvec], _ = self.generate_parameter_vectors(
-            [mngr_idx],
+        pvec_list, _ = self.generate_parameter_vectors(
+            [],
             system_idx_list,
-            as_copy=False
+            as_copy=True,
+            copy_include_systems=True,
             )
-        if not isinstance(pvec_start, type(None)):
-            pvec.reset(
-                pvec_start, pvec.allocations)
+        if not isinstance(pvec_start_list, type(None)):
+            for _mngr_idx in range(self.N_mngr):
+                pvec_list[_mngr_idx].reset(
+                    pvec_start_list[_mngr_idx],
+                    pvec_list[_mngr_idx].allocations)
 
+        pvec    = pvec_list[mngr_idx]
         N_types = pvec.force_group_count
         if split_all:
             type_query_list = list(range(N_types))
@@ -1647,7 +1557,7 @@ class BaseOptimizer(object):
                     k_values_ij = k_values_ij[split_idxs],
                     grad_diff = self.grad_diff_gs,
                     N_trials = N_trials_gradient,
-                    local_targets=False,
+                    local_targets = False,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     )
                 args = (pvec_id, self.targetcomputer_id_dict[system_idx_list], type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, self._N_sys_per_likelihood_batch, mngr_idx, system_idx_list)
@@ -2020,8 +1930,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         import copy
 
-        use_scipy = True
-
         if len(system_idx_list) == 0:
             system_idx_list = list(range(self.N_systems))
 
@@ -2062,7 +1970,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     bounds_penalty = self.bounds_penalty_list,
-                    use_scipy = use_scipy,
                     use_global_opt = _USE_GLOBAL_OPT,
                     verbose = self.verbose,
                     )
@@ -2306,7 +2213,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                         mngr_idx,
                                         self.best_bitvec_type_list[mngr_idx],
                                         sys_idx_pair,
-                                        pvec_start=pvec_list_cp[mngr_idx],
+                                        pvec_start_list=pvec_list_cp,
                                         N_trials_gradient=N_trials_gradient,
                                         split_all=True)
                             del minimize_initial_worker_id_dict[worker_id[0]]
@@ -2407,7 +2314,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     local_targets = False,
                                     bounds_penalty = self.bounds_penalty_list,
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
-                                    use_scipy = True,
                                     use_global_opt = _USE_GLOBAL_OPT,
                                     verbose = self.verbose)
                             args = ast, system_list_id, self.targetcomputer_id_dict[sys_idx_pair], pvec_all_id, \
@@ -2490,7 +2396,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                             if found_improvement_mngr:
                                 self.best_aic_dict[mngr_idx, sys_idx_validation]  = new_AIC
-                                self.best_ast_dict[mngr_idx, sys_idx_validation]  = new_ast, mngr_idx, sys_idx_pair
+                                self.best_ast_dict[mngr_idx, sys_idx_validation]  = new_ast, sys_idx_pair
                                 self.best_pvec_dict[mngr_idx, sys_idx_validation] = [pvec[:].copy() for pvec in pvec_list], best_bitvec_type_list
                             else:
                                 continue
@@ -2516,30 +2422,30 @@ class ForceFieldOptimizer(BaseOptimizer):
                     best_ast_vote_dict[mngr_idx]  = dict()
                     best_pvec_vote_dict[mngr_idx] = dict()
                 for mngr_idx, sys_idx_validation in self.best_ast_dict:
-                    best_ast, _, _ = self.best_ast_dict[mngr_idx, sys_idx_validation]
+                    best_ast, sys_idx_pair = self.best_ast_dict[mngr_idx, sys_idx_validation]
                     if best_ast in best_ast_vote_dict[mngr_idx]:
-                        best_ast_vote_dict[mngr_idx][best_ast] += 1
+                        best_ast_vote_dict[mngr_idx][best_ast, sys_idx_pair] += 1
                     else:
-                        best_ast_vote_dict[mngr_idx][best_ast] = 1
-                        best_pvec_vote_dict[mngr_idx][best_ast] = self.best_pvec_dict[mngr_idx, sys_idx_validation]
+                        best_ast_vote_dict[mngr_idx][best_ast, sys_idx_pair] = 1
+                        best_pvec_vote_dict[mngr_idx][best_ast, sys_idx_pair] = self.best_pvec_dict[mngr_idx, sys_idx_validation]
 
                 pvec_list_query = list()
                 bitvec_type_list_query = list()
                 for mngr_idx in range(self.N_mngr):
-                    best_ast_list = sorted(
+                    best_ast_sysidx_list = sorted(
                         best_ast_vote_dict[mngr_idx],
                         key=best_ast_vote_dict[mngr_idx].get,
                         reverse=True)
-                    if len(best_ast_list) > 3:
-                        best_ast_list = best_ast_list[:3]
-                    for best_ast in best_ast_list:
-                        pvec_list, bitvec_type_list = best_pvec_vote_dict[mngr_idx][best_ast]
+                    if len(best_ast_sysidx_list) > 3:
+                        best_ast_sysidx_list = best_ast_sysidx_list[:3]
+                    for best_ast_sysidx in best_ast_sysidx_list:
+                        pvec_list, bitvec_type_list = best_pvec_vote_dict[mngr_idx][best_ast_sysidx]
                         pvec_list_query.append(pvec_list)
                         bitvec_type_list_query.append(bitvec_type_list)
                     if self.verbose:
-                        for best_ast in best_ast_list:
+                        for best_ast_sysidx in best_ast_sysidx_list:
                             print(
-                                    f"Mngr {mngr_idx} / ast {best_ast}: N votes {best_ast_vote_dict[mngr_idx][best_ast]}")
+                                    f"Mngr {mngr_idx} / ast {best_ast_sysidx[0]} / sys_idx {best_ast_sysidx[1]}: N votes {best_ast_vote_dict[mngr_idx][best_ast_sysidx]}")
 
                 ### Figure out if we can combine the individual solutions
                 worker_id_dict = dict()
