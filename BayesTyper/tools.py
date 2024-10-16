@@ -97,7 +97,7 @@ def benchmark_systems(
                             output_str_list.append(" "*8 + f"{error_name:15s}" + f"{val:4.2f}")
                         if target_name not in OVERALL_STATS:
                             OVERALL_STATS[target_name] = dict()
-                        if error_key not in OVERALL_STATS[target_name]:
+                        if error_name not in OVERALL_STATS[target_name]:
                             OVERALL_STATS[target_name][error_name] = list()
                         OVERALL_STATS[target_name][error_name].append(val)     
                 if not only_global:
@@ -1444,7 +1444,7 @@ def generate_systemmanager(
                                             "energies"            : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
                                             "rdmol"               : sys_target.rdmol,
                                             "minimize"            : False,
-                                            "denom_ene"           : 1. * _ENERGY_PER_MOL * error_scale_torsion, 
+                                            "denom_ene"           : 4.18 * _ENERGY_PER_MOL * error_scale_torsion, 
                                             "ene_weighting"       : ene_weighting,
                                             "reference_to_lowest" : reference_to_lowest,
                                         }
@@ -1461,7 +1461,7 @@ def generate_systemmanager(
                                     "H_constraint" : False,
                                     "denom_bond"   : 5.0e-3 * _LENGTH * error_scale_geo,
                                     "denom_angle"  : 8.0e-0 * _ANGLE * error_scale_geo,
-                                    "denom_torsion" : 1.0e+1 * _ANGLE * error_scale_geo,
+                                    "denom_torsion" : 2.0e+1 * _ANGLE * error_scale_geo,
                                   }
                 if target_dict_geo["structures"]:
                     sys.add_target(GeoTarget, target_dict_geo)
@@ -1488,7 +1488,7 @@ def generate_systemmanager(
                                     "minimize"            : False,
                                     "ene_weighting"       : ene_weighting,
                                     "reference_to_lowest" : reference_to_lowest, 
-                                    "denom_ene"           : 1. * _ENERGY_PER_MOL * error_scale_offeq,
+                                    "denom_ene"           : 4.18 * _ENERGY_PER_MOL * error_scale_offeq,
                                 }
                 if target_dict_ene["structures"]:
                     sys.add_target(EnergyTarget, target_dict_ene)
@@ -1505,7 +1505,7 @@ def generate_systemmanager(
                                     "ene_weighting": ene_weighting,
                                     "denom_bond"   : 5.0e-0 * _FORCE * error_scale_force,
                                     "denom_angle"  : 5.0e-1 * _FORCE * error_scale_force,
-                                    "denom_force"  : 1.0e+4 * _FORCE * error_scale_force,
+                                    "denom_force"  : 2.0e+4 * _FORCE * error_scale_force,
                                 }
                 if target_dict_frc["structures"]:
                     if force_projection:
