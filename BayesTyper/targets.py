@@ -244,7 +244,7 @@ def run_normalmodetarget(
             if unit.is_quantity(target_freqs[strc_idx]):
                 target_freqs[strc_idx] = target_freqs[strc_idx].value_in_unit(_WAVENUMBER)
             _diff = abs(freqs - target_freqs[strc_idx])
-            _rss  = _diff**2 * (1./denom_frq)**2
+            _rss  = _diff**2 / denom_frq**2
             if permute:
                 overlap = np.einsum('ij,ik', target_modes[strc_idx], modes)
                 row_ind, col_ind = optimize.linear_sum_assignment(1.-overlap)
@@ -542,8 +542,8 @@ def run_energytarget(
         target_denom[valids2] = 1./np.sqrt(_lower + (delta_target_energies[valids2] - _lower)**2)
         target_denom[valids3] = 0.
 
-    #_target_denom = target_denom / np.sum(target_denom, axis=0)
-    #target_denom  = _target_denom
+   # _target_denom = target_denom / np.sum(target_denom, axis=0)
+   # target_denom  = _target_denom
 
     ### Important: Add the forces only through the engine.
     ### The original openmm_system object must remain untouched.

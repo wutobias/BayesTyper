@@ -1444,7 +1444,7 @@ def generate_systemmanager(
                                             "energies"            : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
                                             "rdmol"               : sys_target.rdmol,
                                             "minimize"            : False,
-                                            "denom_ene"           : 4.18 * _ENERGY_PER_MOL * error_scale_torsion, 
+                                            "denom_ene"           : 2.5 * _ENERGY_PER_MOL * error_scale_torsion, 
                                             "ene_weighting"       : ene_weighting,
                                             "reference_to_lowest" : reference_to_lowest,
                                         }
@@ -1488,7 +1488,7 @@ def generate_systemmanager(
                                     "minimize"            : False,
                                     "ene_weighting"       : ene_weighting,
                                     "reference_to_lowest" : reference_to_lowest, 
-                                    "denom_ene"           : 4.18 * _ENERGY_PER_MOL * error_scale_offeq,
+                                    "denom_ene"           : 2.5 * _ENERGY_PER_MOL * error_scale_offeq,
                                 }
                 if target_dict_ene["structures"]:
                     sys.add_target(EnergyTarget, target_dict_ene)

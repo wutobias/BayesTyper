@@ -48,7 +48,7 @@ _INACTIVE_GROUP_IDX = -99
 _TIMEOUT         = 99999999 # timeout in seconds
 _VERBOSE         = True
 #_EPSILON         = 1.4901161193847656e-08 # finite difference gradient
-_EPSILON         = 1.e-5
+_EPSILON         = 1.e-4
 _EPSILON_GS      = 1.e-2 # finitite difference for gradient score
 #force tolerance for openmm energy minimization
 #note that after openmm 8.1.0 this has units unit.kilojoules_per_mole/unit.nanometer

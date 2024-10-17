@@ -82,9 +82,9 @@ def likelihood_combine_pvec(
             ref_pvec_cp, targetcomputer, three_point=False, N_sys_per_batch=8)
 
     from .bitvector_typing import bitvec_hierarchy_to_allocations
-    results_dict = dict()
     import itertools
 
+    results_dict = dict()
     for selection in itertools.product(range(N_queries), repeat=N_mngr):
         failed = False
         N_parms_all = 0
@@ -112,8 +112,9 @@ def likelihood_combine_pvec(
                 break
         if not failed:
             logL._initialize_systems()
-            x0   = logL.pvec[:]
-            aic = 2. * N_parms_all * parm_penalty - 2.*logL(x0)
+            x0         = logL.pvec[:]
+            likelihood = logL(x0)
+            aic        = 2. * N_parms_all * parm_penalty - 2. * likelihood
             results_dict[selection] = aic
 
     return results_dict
@@ -626,25 +627,22 @@ def validate_FF(
             ast, _, _, _, _, _, _, _, _, _, _ = args
             _, _, (type_i, type_j) = ast
 
+            allocation_failure = False
             for mngr_idx in range(N_mngr):
-                if mngr_idx == mngr_idx_main:
-                    allocations = [0 for _ in pvec_list_cp[mngr_idx_main].allocations]
-                    pvec_list_cp[mngr_idx_main].allocations[:] = allocations
-                    pvec_list_cp[mngr_idx_main].reset(
-                        _pvec_list[mngr_idx_main],
-                        pvec_list_cp[mngr_idx_main].allocations)
-                else:
-                    allocations = [-1 for _ in pvec_list_cp[mngr_idx].allocations]
-                    bitvec_type_list_list_cp[mngr_idx] = bitvec_type_all_list[mngr_idx]
-                    bitvec_hierarchy_to_allocations(
-                        bitvec_alloc_dict_list[mngr_idx],
-                        bitvec_type_all_list[mngr_idx],
-                        allocations)
-                    if allocations.count(-1) == 0:
-                        pvec_list_cp[mngr_idx].allocations[:] = allocations
-                        pvec_list_cp[mngr_idx].reset(
-                            _pvec_list[mngr_idx],
-                            pvec_list_cp[mngr_idx].allocations)
+                allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
+                bitvec_hierarchy_to_allocations(
+                    bitvec_alloc_dict_list[mngr_idx], 
+                    bitvec_type_all_list[mngr_idx],
+                    allocations
+                    )
+                if allocations.count(-1) > 0:
+                    allocation_failure = True
+                pvec_list_cp[mngr_idx].allocations[:] = allocations
+                pvec_list_cp[mngr_idx].reset(
+                    _pvec_list[mngr_idx],
+                    pvec_list_cp[mngr_idx].allocations)
+            if allocation_failure:
+                continue
 
             bitvec_list = list()
             alloc_list  = list()
@@ -668,6 +666,8 @@ def validate_FF(
                             )
                         bitvec_list.append(b)
                 bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
+            if len(alloc_list) == 0:
+                continue
 
             AIC_list = _calculate_AIC(
                 pvec_list_cp,
@@ -698,13 +698,6 @@ def validate_FF(
                 bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
                     bitvec_type_list_list_initial[mngr_idx])
         
-    #if verbose:
-    #    if found_improvement:
-    #        print(
-    #                f"Found Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
-    #    else:
-    #        print(
-    #                f"Found no Improvement for mngr_idx {mngr_idx_main}: {best_AIC}")
     if verbose:
         from .tools import benchmark_systems
         print(
@@ -892,8 +885,8 @@ class BaseOptimizer(object):
         self.best_bitvec_type_list.append(
             list())
 
-        [pvec], _ = self.generate_parameter_vectors(
-            mngr_idx_list=[self.N_mngr-1])
+        pvec_list, _ = self.generate_parameter_vectors()
+        pvec = pvec_list[-1]
         if rich_types:
             import copy
             _bond_ring = copy.deepcopy(
@@ -995,7 +988,6 @@ class BaseOptimizer(object):
     
     def generate_parameter_vectors(
         self, 
-        mngr_idx_list = list(),
         system_idx_list = list(),
         as_copy = False,
         copy_include_systems = False,
@@ -1003,20 +995,10 @@ class BaseOptimizer(object):
 
         import copy
 
-        if len(mngr_idx_list) == 0:
-            _mngr_idx_list = list(range(self.N_mngr))
-        else:
-            _mngr_idx_list = mngr_idx_list
-
         if len(system_idx_list) == 0:
             _system_idx_list = list(range(self.N_systems))
         else:
             _system_idx_list = system_idx_list
-
-        if max(_mngr_idx_list) > (self.N_mngr-1):
-            raise ValueError(
-                "No element in `mngr_idx_list` can be larger then maximum number of parameter managers."
-                )
 
         if max(_system_idx_list) > (self.N_systems-1):
             raise ValueError(
@@ -1026,8 +1008,7 @@ class BaseOptimizer(object):
         _system_idx_list = sorted(_system_idx_list)
         pvec_list = list()
         bitvec_type_list = list()
-        for mngr_idx in _mngr_idx_list:
-            key = mngr_idx, tuple(_system_idx_list)
+        for mngr_idx in range(self.N_mngr):
             parm_mngr = self.generate_parameter_manager(
                 mngr_idx, 
                 _system_idx_list
@@ -1078,6 +1059,61 @@ class BaseOptimizer(object):
                 pvec_list[i].parameter_manager.system_list = system_list
 
         return pvec_list, bitvec_type_list
+
+
+    def calc_log_likelihood(
+        self, 
+        system_idx_list = list(),
+        as_dict = False,
+        ):
+        
+        import numpy as np
+
+        if len(system_idx_list) == 0:
+            _system_idx_list = list(range(self.N_systems))
+        else:
+            _system_idx_list = system_idx_list
+
+        worker_id_dict = dict()
+        for sys_idx in _system_idx_list:
+            sys_dict = dict()
+            if isinstance(sys_idx, int):
+                sys = self.system_list[sys_idx]
+                sys_dict[sys.name, sys_idx] = sys.openmm_system
+            else:
+                for _sys_idx in sys_idx:
+                    sys = self.system_list[_sys_idx]
+                    sys_dict[sys.name, _sys_idx] = sys.openmm_system
+            targetcomputer = ray.get(self.targetcomputer_id_dict[sys_idx])
+            worker_id = targetcomputer(sys_dict, False)
+            worker_id_dict[worker_id] = sys_idx
+
+        if as_dict:
+            logP_likelihood = dict()
+        else:
+            logP_likelihood = 0.
+        worker_id_list = list(worker_id_dict.keys())
+        while worker_id_list:
+            worker_id, worker_id_list = ray.wait(
+                worker_id_list)
+            try:
+                _logP_likelihood, _ = ray.get(
+                    worker_id[0], timeout=_TIMEOUT)
+                failed = False
+            except:
+                if _VERBOSE:
+                    import traceback
+                    print(traceback.format_exc())
+                failed = True
+            if not failed:
+                sys_idx = worker_id_dict[worker_id[0]]
+                if as_dict:
+                    logP_likelihood[sys_idx] = _logP_likelihood
+                else:
+                    logP_likelihood += _logP_likelihood
+                del worker_id_dict[worker_id[0]]
+
+        return logP_likelihood
 
 
     def update_best(
@@ -1393,7 +1429,6 @@ class BaseOptimizer(object):
             system_idx_list
             )
         pvec_list, _ = self.generate_parameter_vectors(
-            [],
             system_idx_list,
             as_copy=True,
             copy_include_systems=True,
@@ -1557,6 +1592,58 @@ class ForceFieldOptimizer(BaseOptimizer):
         self.system_manager_loader = None
 
 
+    def calculate_AIC(
+        self,
+        mngr_idx_list = list(),
+        system_idx_list = list(),
+        parm_penalty = 1.,
+        as_dict = False
+        ):
+
+        if len(mngr_idx_list) == 0:
+            _mngr_idx_list = list(range(self.N_mngr))
+        else:
+            _mngr_idx_list = mngr_idx_list
+
+        if len(system_idx_list) == 0:
+            _system_idx_list = list(range(self.N_systems))
+        else:
+            _system_idx_list = system_idx_list
+
+        if as_dict:
+            AIC_score = dict()
+            for sys_idx in _system_idx_list:
+                N_parms_all = 0.
+                if isinstance(sys_idx, int):
+                    _sys_idx_list = [sys_idx]
+                else:
+                    _sys_idx_list = sys_idx
+                N_parms_all = self.get_number_of_parameters(
+                    _mngr_idx_list,
+                    _sys_idx_list
+                    )
+                AIC_score[sys_idx] = 2. * N_parms_all * parm_penalty
+            logP_likelihood = self.calc_log_likelihood(
+                _system_idx_list, 
+                as_dict=True
+                )
+            for sys_idx in _system_idx_list:
+                AIC_score[sys_idx] -= 2. * logP_likelihood[sys_idx]
+
+        else:
+            N_parms_all = self.get_number_of_parameters(
+                _mngr_idx_list,
+                _system_idx_list
+                )
+            AIC_score  = 2. * N_parms_all * parm_penalty
+            AIC_score -= 2. * self.calc_log_likelihood(
+                _system_idx_list,
+                as_dict=False
+                )
+
+        return AIC_score
+
+
     def garbage_collection(
         self, 
         N_systems_validation = 10,
@@ -1652,10 +1739,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
             if found_improvement:
                 mngr_idx, type_i = best_mngr_type
-                pvec_list, bitvec_type_list_list = self.generate_parameter_vectors([mngr_idx])
+                pvec_list, bitvec_type_list_list = self.generate_parameter_vectors()
                 _, bitvec_list_alloc_dict = self.generate_bitsmartsmanager(mngr_idx)
-                pvec             = pvec_list[0]
-                bitvec_type_list = bitvec_type_list_list[0]
+                pvec             = pvec_list[mngr_idx]
+                bitvec_type_list = bitvec_type_list_list[mngr_idx]
                 N_types          = pvec.force_group_count
 
                 if type_i == 0:
@@ -1826,7 +1913,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         system_list = [self.system_list[sys_idx] for sys_idx in system_idx_list]
         pvec_all, bitvec_type_list = self.generate_parameter_vectors(
-            [],
             system_idx_list,
             )
 
@@ -2039,7 +2125,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     time_diff_dict = dict()
                     for sys_idx_pair in self.system_idx_list_batch:
                         time_diff_dict[sys_idx_pair] = 0.
-                        [pvec], _ = self.generate_parameter_vectors([0], sys_idx_pair)
+                        pvec_list, _ = self.generate_parameter_vectors(sys_idx_pair)
+                        pvec    = pvec_list[0]
                         pvec_id = ray.put(pvec)
                         for _ in range(N_trials_opt):
                             worker_id = _test_logL.remote(
@@ -2287,10 +2374,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                             if found_improvement_mngr:
                                 self.best_aic_dict[mngr_idx, sys_idx_validation]  = new_AIC
+                                ### If `new_ast` is `None`, then it means that we have not
+                                ### found anything that performs better then the initial model
                                 self.best_ast_dict[mngr_idx, sys_idx_validation]  = new_ast, sys_idx_pair
                                 self.best_pvec_dict[mngr_idx, sys_idx_validation] = [pvec[:].copy() for pvec in pvec_list], best_bitvec_type_list
-                            else:
-                                continue
 
                     del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
                     del self.bitvec_dict[mngr_idx,sys_idx_pair]
@@ -2314,35 +2401,53 @@ class ForceFieldOptimizer(BaseOptimizer):
                     best_pvec_vote_dict[mngr_idx] = dict()
                 for mngr_idx, sys_idx_validation in self.best_ast_dict:
                     best_ast, sys_idx_pair = self.best_ast_dict[mngr_idx, sys_idx_validation]
-                    if best_ast in best_ast_vote_dict[mngr_idx]:
+                    if (best_ast, sys_idx_pair) in best_ast_vote_dict[mngr_idx]:
                         best_ast_vote_dict[mngr_idx][best_ast, sys_idx_pair] += 1
                     else:
                         best_ast_vote_dict[mngr_idx][best_ast, sys_idx_pair] = 1
                         best_pvec_vote_dict[mngr_idx][best_ast, sys_idx_pair] = self.best_pvec_dict[mngr_idx, sys_idx_validation]
 
+                if self.verbose:
+                    print(
+                        "VALIDATION I: AIC of SMARTS patterns on same parameter set.")
+                    for mngr_idx, sys_idx_validation in self.best_ast_dict:
+                        aic = self.best_aic_dict[mngr_idx, sys_idx_validation]
+                        new_ast, sys_idx_pair = self.best_ast_dict[mngr_idx, sys_idx_validation]
+                        print(
+                            f"MANAGER {mngr_idx} / VALIDATION SYSTEM {sys_idx_validation} / TRAINING SYSTEM {sys_idx_pair} / AST {new_ast} / AIC {aic}")
+
                 pvec_list_query = list()
                 bitvec_type_list_query = list()
+                MAX_VALIDATE = 10
                 if not isinstance(self.best_pvec_list, type(None)):
                     pvec_list_query.append(
-                            self.self.best_pvec_list)
+                            self.best_pvec_list)
                     bitvec_type_list_query.append(
                             self.best_bitvec_type_list)
+                if self.verbose:
+                    print(
+                        "VALIDATION I: VOTES of SMARTS patterns on same parameter set.")
                 for mngr_idx in range(self.N_mngr):
                     best_ast_sysidx_list = sorted(
-                        best_ast_vote_dict[mngr_idx],
+                            best_ast_vote_dict[mngr_idx],
                         key=best_ast_vote_dict[mngr_idx].get,
                         reverse=True)
-                    if len(best_ast_sysidx_list) > 3:
-                        best_ast_sysidx_list = best_ast_sysidx_list[:3]
-                    for best_ast_sysidx in best_ast_sysidx_list:
-                        pvec_list, bitvec_type_list = best_pvec_vote_dict[mngr_idx][best_ast_sysidx]
+                    if len(best_ast_sysidx_list) > MAX_VALIDATE:
+                        best_ast_sysidx_list = best_ast_sysidx_list[:MAX_VALIDATE]
+                    for best_ast, sys_idx_pair in best_ast_sysidx_list:
+                        pvec_list, bitvec_type_list = best_pvec_vote_dict[mngr_idx][best_ast, sys_idx_pair]
                         pvec_list_query.append(pvec_list)
                         bitvec_type_list_query.append(bitvec_type_list)
                     if self.verbose:
-                        for best_ast_sysidx in best_ast_sysidx_list:
+                        for best_ast, sys_idx_pair in best_ast_sysidx_list:
+                            N_votes = best_ast_vote_dict[mngr_idx][best_ast, sys_idx_pair]
                             print(
-                                    f"Mngr {mngr_idx} / ast {best_ast_sysidx[0]} / sys_idx {best_ast_sysidx[1]}: N votes {best_ast_vote_dict[mngr_idx][best_ast_sysidx]}")
+                                f"MANAGER {mngr_idx} / TRAINING SYSTEM {sys_idx_pair} / AST {best_ast} / N VOTES {N_votes}")
 
+                if self.verbose:
+                    print()
+                    print(
+                        "VALIDATION II: VOTES of SMARTS pattern combinations.")
                 ### Figure out if we can combine the individual solutions
                 worker_id_dict = dict()
                 for sys_idx_validation in self.sys_idx_list_validation:
@@ -2351,7 +2456,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bitvec_list_alloc_dict_list = list()
                     for mngr_idx in range(self.N_mngr):
                         _, bitvec_list_alloc_dict = self.generate_bitsmartsmanager(
-                            mngr_idx, 
+                            mngr_idx,
                             sys_idx_validation)
                         bitvec_list_alloc_dict_list.append(
                             bitvec_list_alloc_dict)
@@ -2375,26 +2480,31 @@ class ForceFieldOptimizer(BaseOptimizer):
                     else:
                         best_likelihood_vote_dict[best_selection] = 1
 
+                if self.verbose:
+                    for best_selection in best_likelihood_vote_dict:
+                        N_votes    = best_likelihood_vote_dict[best_selection]
+                        output_str = list()
+                        for mngr_idx in range(self.N_mngr):
+                            output_str.append(
+                                f"MANAGER {mngr_idx} CANDIDATE {best_selection[mngr_idx]}")
+                        print(
+                            " / ".join(output_str) + f" : N VOTES {N_votes}")
+
                 best_selection = max(
                     best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
-                sys_idx_list_validation_all = list()
-                for sys_idx_list in self.sys_idx_list_validation:
-                    sys_idx_list_validation_all.extend(
-                        list(sys_idx_list))
+                if self.verbose:
+                    old_pvec_list, _ = self.generate_parameter_vectors(
+                            system_idx_list=[0])
                 for mngr_idx in range(self.N_mngr):
                     candidate_idx = best_selection[mngr_idx]
                     pvec_list = pvec_list_query[candidate_idx]
                     bitvec_type_list = bitvec_type_list_query[candidate_idx]
-                    if self.verbose:
-                        [old_pvec], _ = self.generate_parameter_vectors(
-                            mngr_idx_list=[mngr_idx],
-                            system_idx_list=sys_idx_list_validation_all)
-
                     self.update_best(
                         mngr_idx,
                         pvec_list[mngr_idx],
                         bitvec_type_list[mngr_idx])
                     if self.verbose:
+                        old_pvec = old_pvec_list[mngr_idx]
                         print(
                             f"Updating manager {mngr_idx} from manager optimization {candidate_idx}")
                         print(
@@ -2417,9 +2527,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                     print(
                         "======================")
                     from .tools import benchmark_systems
-                    [_pvec], _ = self.generate_parameter_vectors(
-                        mngr_idx_list=[0],
-                        system_idx_list=sys_idx_list_validation_all)
+                    sys_idx_list_validation_all = list()
+                    for sys_idx_list in self.sys_idx_list_validation:
+                        sys_idx_list_validation_all.extend(
+                                list(sys_idx_list))
+                    _pvec_list, _ = self.generate_parameter_vectors(
+                        system_idx_list = sys_idx_list_validation_all)
+                    _pvec = _pvec_list[0]
                     benchmark_systems(
                         _pvec.parameter_manager.system_list)
 
@@ -2443,6 +2557,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 ### END SPLIT ATTEMPT ###
                 ### ================= ###
 
+                self.clear_cache()
                 self.system_manager_loader.clear_cache()
             
             ### Remove tempory data
