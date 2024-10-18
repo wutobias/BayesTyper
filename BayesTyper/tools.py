@@ -52,7 +52,9 @@ get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 
 def benchmark_systems(
-    system_list, KEY_LIST = ["rmse"], print_output=True, only_global=False):
+    system_list, KEY_LIST = ["rmse"], 
+    print_output=True, only_global=False,
+    local=False):
 
     from BayesTyper import targets
     from BayesTyper import engines
@@ -62,9 +64,17 @@ def benchmark_systems(
     openmm_system_dict = dict()
     for i, sys in enumerate(system_list):
         openmm_system_dict[sys.name,0] = sys.openmm_system
-    worker_id = tc(openmm_system_dict, True, False)
-
-    logP, results_dict = ray.get(worker_id)
+    if local:
+        logP, results_dict = tc(
+            openmm_system_dict, 
+            return_results_dict=True, 
+            local=True)
+    else:
+        worker_id = tc(
+            openmm_system_dict, 
+            return_results_dict=True, 
+            local=False)
+        logP, results_dict = ray.get(worker_id)
 
     if print_output:
         output_str_list = list()

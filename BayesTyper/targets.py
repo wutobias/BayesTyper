@@ -595,12 +595,12 @@ def run_energytarget(
         _delta_energies = np.reshape(energy_list, (N_strcs, 1))
         delta_energies  = _delta_energies - _delta_energies.transpose()
 
-    _diff = delta_energies - delta_target_energies
+    _diff = (delta_energies - delta_target_energies) * target_denom
     if not reference_to_lowest:
-        _diff_avg = _diff / float(N_strcs)
-        _rss = _diff_avg**2 * target_denom / denom_ene**2
+        _diff_avg = _diff / np.sum(target_denom)
+        _rss = _diff_avg**2 / denom_ene**2
     else:
-        _rss  = _diff**2 * target_denom / denom_ene**2
+        _rss  = _diff**2 / denom_ene**2
 
     for strc_idx in range(N_strcs):
         if reference_to_lowest:
@@ -614,7 +614,7 @@ def run_energytarget(
 
     diff = np.sum(_diff) * _ENERGY_PER_MOL
     rss  = np.sum(_rss)
-    log_norm_factor  = np.log(denom_ene)
+    log_norm_factor = np.log(denom_ene)
 
     del engine
 
@@ -912,14 +912,19 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
 
     return logP_likelihood, results_all_dict
 
-target_worker = ray.remote(target_worker_local)
+
+@ray.remote
+def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
+    return target_worker_local(openmm_system_dict, target_dict, return_results_dict=return_results_dict)
+
 
 class TargetComputer(object):
 
     def __init__(
         self, 
         system_list, 
-        target_type_list=None):
+        target_type_list=None,
+        error_factor=1.):
 
         import ray
         from .system import SystemManager
@@ -943,12 +948,20 @@ class TargetComputer(object):
             for target in sys.target_list:            
                 if target_type_list == None:
                     target_args = target.get_args()
+                    for arg in target_args:
+                        if arg.startswith("denom"):
+                            val = target_args[arg]
+                            target_args[arg] = val * error_factor
                     target_name = target.get_target_name()
                     target_list.append(
                         (target_args, target_name))
                 else:
                     if isinstance(target, target_type_list):
                         target_args = target.get_args()
+                        for arg in target_args:
+                            if arg.startswith("denom"):
+                                val = target_args[arg]
+                                target_args[arg] = val * error_factor
                         target_name = target.get_target_name()
                         target_list.append(
                             (target_args, target_name))
