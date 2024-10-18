@@ -394,7 +394,7 @@ def minimize_FF(
             N = pvec.force_group_count
             M = pvec.parameters_per_force_group
             if isinstance(bounds, (priors.AngleBounds, priors.BondBounds)):
-                for i in range(0,N*M):
+                for i in range(0,N*M,2):
                     ### We only want to consider the
                     ### equilibrium bond lengths and angles
                     prior_idx_list.append(i+1+N_parms)
