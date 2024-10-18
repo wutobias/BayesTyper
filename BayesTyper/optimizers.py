@@ -394,11 +394,16 @@ def minimize_FF(
             N = pvec.force_group_count
             M = pvec.parameters_per_force_group
             if isinstance(bounds, (priors.AngleBounds, priors.BondBounds)):
-                for i in range(0,N*M,2):
+                for i in range(0,N*M):
                     ### We only want to consider the
                     ### equilibrium bond lengths and angles
                     prior_idx_list.append(i+1+N_parms)
                     bounds_penalty_list.append(bounds_penalty[pvec_idx])
+                #for i in range(N*M):
+                #    ### We only want to consider the
+                #    ### equilibrium bond lengths and angles
+                #    prior_idx_list.append(i+N_parms)
+                #    bounds_penalty_list.append(bounds_penalty[pvec_idx])
             else:
                 for i in range(0,N*M):
                     ### We want to consider all Amplitudes
@@ -813,13 +818,15 @@ class BaseOptimizer(object):
                         f"Could not load system {smi}")
 
 
-    def set_targetcomputer(self, system_idx_list):
+    def set_targetcomputer(self, system_idx_list, error_factor=1.):
 
         from .targets import TargetComputer
 
         for sys_idx_pair in system_idx_list:
             targetcomputer = TargetComputer(
-                [self.system_list[sys_idx] for sys_idx in sys_idx_pair])
+                [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                target_type_list=None,
+                error_factor=error_factor)
             self.targetcomputer_id_dict[sys_idx_pair] = ray.put(
                 targetcomputer)
             #print(
@@ -2007,7 +2014,10 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### Use this many systems for validation
         N_systems_validation = 10,
         ### Use this many validation iterations
-        N_iter_validation = 10):
+        N_iter_validation = 10,
+        ### By this fraction the error (i.e. the likelihood denominator) 
+        ### will be decrease upon each splitting iteration.
+        error_decrease_factor=0.2):
 
         self.generate_clustering()
 
@@ -2093,14 +2103,12 @@ class ForceFieldOptimizer(BaseOptimizer):
             ### ============== ###
             ### PROCESS SPLITS ###
             ### ============== ###
-            found_improvement   = True
             while self.split_iteration_idx < max_splitting_attempts:
                 print("Generating systems ...")
                 N_systems  = N_sys_per_batch_split * N_batches
 
                 N_systems += N_systems_validation * N_iter_validation
                 print(f"ATTEMPTING SPLIT {iteration_idx}/{self.split_iteration_idx}")
-                found_improvement = False
                 if not restart:
                     if isinstance(system_idx_dict_batch, dict):
                         self.system_idx_list_batch = system_idx_dict_batch[iteration_idx]
@@ -2112,7 +2120,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 else:
                     self._set_system_list(
                         self._generator_smiles_list)
-                self.set_targetcomputer(self.system_idx_list_batch)
+                self.set_targetcomputer(
+                    self.system_idx_list_batch,
+                    error_factor=(1.-error_decrease_factor)**iteration_idx)
                 if optimize_system_ordering:
                     if self.verbose:
                         print(
@@ -2231,7 +2241,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                     # N_batches       ---> N_iter_validation
                     self.sys_idx_list_validation = self.get_random_system_idx_list(
                             N_systems_validation, N_iter_validation, cluster_systems)
-                    self.set_targetcomputer(self.sys_idx_list_validation)
+                    self.set_targetcomputer(
+                        self.sys_idx_list_validation,
+                        error_factor=(1.-error_decrease_factor)**iteration_idx)
                     for sys_idx_validation in self.sys_idx_list_validation:
                         for mngr_idx in range(self.N_mngr):
                             self.best_ast_dict[mngr_idx, sys_idx_validation]  = None
@@ -2301,7 +2313,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
 
-                    self.set_targetcomputer(self.sys_idx_list_validation)
+                    self.set_targetcomputer(
+                        self.sys_idx_list_validation,
+                        error_factor=(1.-error_decrease_factor)**iteration_idx)
                     for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
                         b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]                                
                         if (mngr_idx, sys_idx_pair) in self.selection_worker_id_dict:
