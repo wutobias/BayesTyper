@@ -633,7 +633,8 @@ def run_energytarget(
 
 
 def run_forcematchingtarget(
-    openmm_system, target_strcs, target_forces, denom_force, return_results_dict=False):
+    openmm_system, target_strcs, target_forces, target_energies, denom_force, 
+    ene_weighting=True, return_results_dict=False):
 
     import copy
 
@@ -652,11 +653,27 @@ def run_forcematchingtarget(
     diff_dict = dict()
     rss_dict  = dict()
 
+    N_atoms = len(target_strcs[0])
+    N_strcs = len(target_strcs)
+
+    target_denom = np.ones(N_strcs, dtype=float)
+    argmin_target_energy  = np.argmin(target_energies)
+    delta_target_energies = np.array(target_energies) - target_energies[argmin_target_energy]
+
+    if ene_weighting:
+        _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
+        _lower     = _ene_unit
+        _upper     = 5. * _ene_unit
+        valids1 = np.where(delta_target_energies < _lower)
+        valids2 = np.where((_lower < delta_target_energies) * ( _upper > delta_target_energies))
+        valids3 = np.where(delta_target_energies > _upper)
+        target_denom[valids1] = 1.
+        target_denom[valids2] = 1./np.sqrt(_lower + (delta_target_energies[valids2] - _lower)**2)
+        target_denom[valids3] = 0.
+
     rss  = 0.
     diff = 0.
 
-    N_atoms = len(target_strcs[0])
-    N_strcs = len(target_strcs)
     diff_list = list()
     for strc_idx in range(N_strcs):
         target_strc  = target_strcs[strc_idx]
@@ -669,7 +686,7 @@ def run_forcematchingtarget(
         forces       = engine.forces.value_in_unit(_FORCE).flatten()
         ### This same as computing length of diff vector
         ### and then taking square
-        _diff        = abs(forces - target_force.flatten())
+        _diff        = abs(forces - target_force.flatten()) * target_denom[strc_idx]
         _diff2       = np.sum(_diff**2)
         _rss         = _diff2 / denom_force**2
         _rss        /= float(N_atoms * 3)
@@ -1512,6 +1529,22 @@ class ForceMatchingTarget(Target):
             self.denom_force = target_dict["denom_force"]
             self.denom_force = self.denom_force.value_in_unit(_FORCE)
 
+        self.ene_weighting  = True
+        if "ene_weighting" in target_dict:
+            self.ene_weighting  = target_dict["ene_weighting"]
+
+        self.target_energies = list()
+        for target_energy in target_dict["energies"]:
+            has_mole = False
+            for t_u in  target_energy.unit.iter_top_base_units():
+                if t_u[0].name == 'mole' and t_u[1] == -1.0:
+                    has_mole = True
+                    break
+            if not has_mole:
+                target_energy *= unit.constants.AVOGADRO_CONSTANT_NA
+            target_energy  = target_energy.value_in_unit(_ENERGY_PER_MOL)
+            self.target_energies.append(target_energy)
+        
         self.target_forces = list()
         for target_force in target_dict["forces"]:
             has_mole = False
@@ -1548,10 +1581,11 @@ class ForceMatchingTarget(Target):
     def get_args(self):
 
         args = {
-            "target_strcs"  : self.target_strcs,
-            "target_strcs"  : self.target_strcs,
-            "target_forces" : self.target_forces,
-            "denom_force"   : self.denom_force}
+            "target_strcs"   : self.target_strcs,
+            "target_forces"  : self.target_forces,
+            "target_energies": self.target_energies,
+            "ene_weighting"  : self.ene_weighting,
+            "denom_force"    : self.denom_force}
 
         return args
 
