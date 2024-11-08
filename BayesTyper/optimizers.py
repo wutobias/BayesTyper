@@ -2017,7 +2017,10 @@ class ForceFieldOptimizer(BaseOptimizer):
         N_iter_validation = 10,
         ### By this fraction the error (i.e. the likelihood denominator) 
         ### will be decrease upon each splitting iteration.
-        error_decrease_factor=0.2):
+        error_decrease_factor=0.2,
+        ### Number of solutions to keep from each manager
+        ### for final (stage II) validation.
+        MAX_VALIDATE=10):
 
         self.generate_clustering()
 
@@ -2432,7 +2435,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 pvec_list_query = list()
                 bitvec_type_list_query = list()
-                MAX_VALIDATE = 10
                 if not isinstance(self.best_pvec_list, type(None)):
                     pvec_list_query.append(
                             self.best_pvec_list)
