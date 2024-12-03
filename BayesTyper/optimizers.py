@@ -736,6 +736,7 @@ class BaseOptimizer(object):
         self.name = name
 
         self.bounds_list = list()
+        self._bounds_penalty_list_work = list()
         self.bounds_penalty_list = list()
 
         self.parameter_manager_list = list()
@@ -877,6 +878,7 @@ class BaseOptimizer(object):
         self.scaling_factor_list.append(scale_list)
 
         self.bounds_list.append(bounds)
+        self._bounds_penalty_list_work.append(bounds_penalty)
         self.bounds_penalty_list.append(bounds_penalty)
 
         ### Must increment at the end, not before.
@@ -933,7 +935,10 @@ class BaseOptimizer(object):
                 if len(bitvec_dict) > 1:
                     for _ in range(len(bitvec_dict)-1):
                         pvec.duplicate(0)
-                pvec[:] += np.random.normal(size=pvec.size)
+                if not isinstance(pvec, type(None)): 
+                    bounds.apply_pvec(pvec)
+                pvec[:] = np.random.normal(
+                        0., 0.01, size=pvec.size)
                 pvec.apply_changes()
 
             bitvector_typing.BitSmartsManager.bond_ring = _bond_ring
@@ -1953,7 +1958,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     #pvec_idx_min = [mngr_idx_main],
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
-                    bounds_penalty = self.bounds_penalty_list,
+                    bounds_penalty = self._bounds_penalty_list_work,
                     use_global_opt = _USE_GLOBAL_OPT,
                     verbose = self.verbose,
                     )
@@ -1964,10 +1969,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                 self.targetcomputer_id_dict[system_idx_list], 
                 pvec_all_id, 
                 bitvec_type_list_id, 
-                self.bounds_list, 
+                self.bounds_list,
                 self.parm_penalty_split, 
                 mngr_idx_main, 
-                self.bounds_penalty_list[mngr_idx_main],
+                self._bounds_penalty_list_work[mngr_idx_main],
                 self._N_sys_per_likelihood_batch,
                 system_idx_list
                 )
@@ -2017,10 +2022,13 @@ class ForceFieldOptimizer(BaseOptimizer):
         N_iter_validation = 10,
         ### By this fraction the error (i.e. the likelihood denominator) 
         ### will be decrease upon each splitting iteration.
-        error_decrease_factor=0.2,
+        error_decrease_factor = 0.2,
+        ### We reduce the scaling factor in the prior by this
+        ### amount upon each splitting iteration.
+        bounds_decrease_factor = 0.7,
         ### Number of solutions to keep from each manager
         ### for final (stage II) validation.
-        MAX_VALIDATE=10):
+        MAX_VALIDATE = 10):
 
         self.generate_clustering()
 
@@ -2103,6 +2111,11 @@ class ForceFieldOptimizer(BaseOptimizer):
             print("ITERATION", iteration_idx)
             print(f"###########{raute_fill}")
 
+            self._bounds_penalty_list_work = list()
+            for val in self.bounds_penalty_list:
+                self._bounds_penalty_list_work.append(
+                        val * (1. - bounds_decrease_factor)**iteration_idx)
+
             ### ============== ###
             ### PROCESS SPLITS ###
             ### ============== ###
@@ -2182,7 +2195,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             ### do local targets
                             local_targets = False,
                             parm_penalty = 1.,
-                            bounds_penalty = self.bounds_penalty_list,
+                            bounds_penalty = self._bounds_penalty_list_work,
                             N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                             use_global_opt = _USE_GLOBAL_OPT,
                             verbose = self.verbose)
@@ -2305,13 +2318,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     parm_penalty = self.parm_penalty_split,
                                     #pvec_idx_min = [mngr_idx],
                                     local_targets = False,
-                                    bounds_penalty = self.bounds_penalty_list,
+                                    bounds_penalty = self._bounds_penalty_list_work,
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_global_opt = _USE_GLOBAL_OPT,
                                     verbose = self.verbose)
                             args = ast, system_list_id, self.targetcomputer_id_dict[sys_idx_pair], pvec_all_id, \
                                    bitvec_type_list_id, self.bounds_list, self.parm_penalty_split, \
-                                   mngr_idx, self.bounds_penalty_list[mngr_idx], self._N_sys_per_likelihood_batch, \
+                                   mngr_idx, self._bounds_penalty_list_work[mngr_idx], self._N_sys_per_likelihood_batch, \
                                    sys_idx_pair
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
