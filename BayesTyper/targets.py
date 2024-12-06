@@ -493,7 +493,8 @@ def run_geotarget(
 def run_energytarget(
     openmm_system, target_strcs, target_energies, 
     denom_ene, minimize, restraint_atom_indices=list(), restraint_k=list(),
-    reference_to_lowest=True, ene_weighting=True, return_results_dict=False):
+    reference_to_lowest=True, ene_weighting=True, ene_cutoff=True, mean_shift=False,
+    return_results_dict=False):
 
     if not unit.is_quantity(target_strcs[0]):
         _xyz = target_strcs[0] * _LENGTH
@@ -531,7 +532,14 @@ def run_energytarget(
         target_denom = np.ones((N_strcs, N_strcs), dtype=float)
         _delta_target_energies = np.reshape(target_energies, (N_strcs, 1))
         delta_target_energies  = _delta_target_energies - _delta_target_energies.transpose()
-    if ene_weighting:
+
+    if ene_cutoff:
+        _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
+        ### Corresponds to 0.1 Ha
+        _upper     = 62.5 * _ene_unit
+        valids = np.where(delta_target_energies > _upper)
+        target_denom[valids] = 0.
+    elif ene_weighting:
         _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
         _lower     = _ene_unit
         _upper     = 5. * _ene_unit
@@ -541,6 +549,9 @@ def run_energytarget(
         target_denom[valids1] = 1.
         target_denom[valids2] = 1./np.sqrt(_lower + (delta_target_energies[valids2] - _lower)**2)
         target_denom[valids3] = 0.
+
+    if mean_shift:
+        delta_target_energies -= np.mean(delta_target_energies)
 
    # _target_denom = target_denom / np.sum(target_denom, axis=0)
    # target_denom  = _target_denom
@@ -589,11 +600,14 @@ def run_energytarget(
             engine.minimize()
         energy_list[strc_idx] = engine.pot_ene.value_in_unit(_ENERGY_PER_MOL)
 
-    if reference_to_lowest:
-        delta_energies = energy_list - energy_list[argmin_target_energy]
+    if mean_shift:
+        delta_energies = energy_list - np.mean(energy_list)
     else:
-        _delta_energies = np.reshape(energy_list, (N_strcs, 1))
-        delta_energies  = _delta_energies - _delta_energies.transpose()
+        if reference_to_lowest:
+            delta_energies = energy_list - energy_list[argmin_target_energy]
+        else:
+            _delta_energies = np.reshape(energy_list, (N_strcs, 1))
+            delta_energies  = _delta_energies - _delta_energies.transpose()
 
     _diff = (delta_energies - delta_target_energies) * target_denom
     if not reference_to_lowest:
@@ -634,7 +648,7 @@ def run_energytarget(
 
 def run_forcematchingtarget(
     openmm_system, target_strcs, target_forces, target_energies, denom_force, 
-    ene_weighting=True, return_results_dict=False):
+    ene_weighting=True, ene_cutoff=True, return_results_dict=False):
 
     import copy
 
@@ -660,7 +674,13 @@ def run_forcematchingtarget(
     argmin_target_energy  = np.argmin(target_energies)
     delta_target_energies = np.array(target_energies) - target_energies[argmin_target_energy]
 
-    if ene_weighting:
+    if ene_cutoff:
+        _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
+        ### Corresponds to 0.1 Ha
+        _upper     = 62.5 * _ene_unit
+        valids = np.where(delta_target_energies > _upper)
+        target_denom[valids] = 0.
+    elif ene_weighting:
         _ene_unit  = (1.*unit.kilocalorie_per_mole).value_in_unit(_ENERGY_PER_MOL)
         _lower     = _ene_unit
         _upper     = 5. * _ene_unit

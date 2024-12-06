@@ -493,9 +493,13 @@ def minimize_FF(
                 _fun,
                 x0,
                 minimizer_kwargs={
-                    "method" : _OPT_METHOD,
-                    "jac"    : _grad},
-                niter=10)
+                    "method"  : _OPT_METHOD,
+                    "jac"     : _grad,
+                    "options" : {
+                        "gtol"    : 1e-2,
+                        "maxiter" : 20 }
+                    },
+                niter=20)
     
     else:
         result = optimize.minimize(
@@ -2498,16 +2502,20 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 best_likelihood_vote_dict  = dict()
                 worker_id_list = list(worker_id_dict.keys())
+                aic_min_dict = dict()
                 while worker_id_list:
                     [worker_id], worker_id_list = ray.wait(worker_id_list)
+                    ### The results_dict contains aic values
                     results_dict = ray.get(worker_id)
                     
                     sys_idx_validation = worker_id_dict[worker_id]
                     best_selection = min(results_dict, key=results_dict.get)
                     if best_selection in best_likelihood_vote_dict:
                         best_likelihood_vote_dict[best_selection] += 1
+                        aic_min_dict[best_selection] = min(aic_min_dict[best_selection], results_dict[best_selection])
                     else:
                         best_likelihood_vote_dict[best_selection] = 1
+                        aic_min_dict[best_selection] = results_dict[best_selection]
 
                 if self.verbose:
                     for best_selection in best_likelihood_vote_dict:
@@ -2517,7 +2525,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             output_str.append(
                                 f"MANAGER {mngr_idx} CANDIDATE {best_selection[mngr_idx]}")
                         print(
-                            " / ".join(output_str) + f" : N VOTES {N_votes}")
+                            " / ".join(output_str) + f" : N VOTES {N_votes} AIC MIN {aic_min_dict[best_selection]}")
 
                 best_selection = max(
                     best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)

@@ -53,5 +53,5 @@ _EPSILON_GS      = 1.e-2 # finitite difference for gradient score
 #force tolerance for openmm energy minimization
 #note that after openmm 8.1.0 this has units unit.kilojoules_per_mole/unit.nanometer
 _MIN_TOLERACE    = 1.e-4 * unit.kilojoules_per_mole
-_USE_GLOBAL_OPT  = False # Use of a global optimizer
+_USE_GLOBAL_OPT  = True # Use of a global optimizer
 _OPT_METHOD      = "BFGS"
