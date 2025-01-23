@@ -20,7 +20,8 @@ from .constants import (_LENGTH,
                         _VERBOSE,
                         _EPSILON,
                         _EPSILON_GS,
-                        _USE_GLOBAL_OPT
+                        _USE_GLOBAL_OPT,
+                        _MAX_ON
                         )
 from .ray_tools import retrieve_failed_workers
 
@@ -72,7 +73,7 @@ def likelihood_combine_pvec(
     system_list = ref_pvec_cp[0].parameter_manager.system_list
     for mngr_idx in range(N_mngr):
         ### IMPORANT: We must rebuild this with list of systems
-        ###           that is common to all parameter managers.
+        ###           that is linked to all parameter managers.
         ref_pvec_cp[mngr_idx].rebuild_from_systems(
             lazy=True, 
             system_list=system_list)
@@ -292,9 +293,9 @@ def get_gradient_scores(
             if np.isnan(norm_j) or np.isinf(norm_j):
                 continue
 
-            if norm_i > 1.e-7:
+            if norm_i > 0.:
                 grad_i /= norm_i
-            if norm_j > 1.e-7:
+            if norm_j > 0.:
                 grad_j /= norm_j
 
             grad_ij_dot = np.dot(
@@ -360,8 +361,12 @@ def minimize_FF(
         _bounds_penalty = [bounds_penalty for _ in pvec_list_cp]
         bounds_penalty = _bounds_penalty
 
-    prior_idx_list = list()
-    parm_idx_list  = list()
+    prior_idx_list_all  = list()
+    prior_idx_list_notk = list()
+    prior_idx_list_k    = list()
+    parm_idx_list_all   = list()
+    parm_idx_list_notk  = list()
+    parm_idx_list_k     = list()
     bounds_penalty_list = list()
     N_parms = 0
     for pvec_idx in pvec_idx_list:
@@ -371,10 +376,16 @@ def minimize_FF(
         ### Look for dead parameters
         hist = pvec.force_group_histogram
         for type_i in range(pvec.force_group_count):
-            if hist[type_i] > 0:
-                for idx in range(pvec.parameters_per_force_group):
-                    parm_idx_list.append(
-                        type_i * pvec.parameters_per_force_group + idx + N_parms)
+            if hist[type_i] == 0:
+                continue
+            for idx in range(pvec.parameters_per_force_group):
+                parm_idx = type_i * pvec.parameters_per_force_group + idx + N_parms
+                name     = pvec.parameter_name_list[idx]
+                if name == 'k':
+                    parm_idx_list_k.append(parm_idx)
+                if name != 'k':
+                    parm_idx_list_notk.append(parm_idx)
+                parm_idx_list_all.append(parm_idx)
 
         ### `lazy=True` just replaces the systems stored in
         ### in the parameter manager with the ones in `system_list_cp`.
@@ -387,144 +398,227 @@ def minimize_FF(
         pvec.apply_changes()
 
         bounds = bounds_list[pvec_idx]
-        N = pvec.force_group_count
-        M = pvec.parameters_per_force_group
         if isinstance(bounds, priors.BaseBounds):
             bounds.apply_pvec(pvec)
-            N = pvec.force_group_count
-            M = pvec.parameters_per_force_group
-            if isinstance(bounds, (priors.AngleBounds, priors.BondBounds)):
-                for i in range(0,N*M,2):
-                    ### We only want to consider the
-                    ### equilibrium bond lengths and angles
-                    prior_idx_list.append(i+1+N_parms)
+            hist = pvec.force_group_histogram
+            for type_i in range(pvec.force_group_count):
+                for idx in range(pvec.parameters_per_force_group):
+                    parm_idx = type_i * pvec.parameters_per_force_group + idx + N_parms
+                    name     = pvec.parameter_name_list[idx]
                     bounds_penalty_list.append(bounds_penalty[pvec_idx])
-                #for i in range(N*M):
-                #    ### We only want to consider the
-                #    ### equilibrium bond lengths and angles
-                #    prior_idx_list.append(i+N_parms)
-                #    bounds_penalty_list.append(bounds_penalty[pvec_idx])
-            else:
-                for i in range(0,N*M):
-                    ### We want to consider all Amplitudes
-                    prior_idx_list.append(i+N_parms)
-                    bounds_penalty_list.append(bounds_penalty[pvec_idx])
+                    if hist[type_i] == 0:
+                        continue
+                    if name == 'k':
+                        prior_idx_list_k.append(parm_idx)
+                    if name != 'k':
+                        prior_idx_list_notk.append(parm_idx)
+                    prior_idx_list_all.append(parm_idx)
 
         N_parms += pvec.size
 
-    prior_idx_list  = np.array(prior_idx_list, dtype=int)
-    bounds_penalty_list  = np.array(bounds_penalty_list, dtype=float)
-    parm_idx_list  = np.array(parm_idx_list, dtype=int)
-    likelihood_func = LikelihoodVectorized(
-        pvec_min_list,
-        targetcomputer,
-        N_sys_per_batch = N_sys_per_likelihood_batch)
+    prior_idx_list_all  = np.array(prior_idx_list_all, dtype=int)
+    prior_idx_list_notk = np.array(prior_idx_list_notk, dtype=int)
+    prior_idx_list_k    = np.array(prior_idx_list_k, dtype=int)
+    parm_idx_list_all   = np.array(parm_idx_list_all, dtype=int)
+    parm_idx_list_notk  = np.array(parm_idx_list_notk, dtype=int)
+    parm_idx_list_k     = np.array(parm_idx_list_k, dtype=int)
 
-    x0 = copy.deepcopy(likelihood_func.pvec[:])
-    x0_ref = copy.deepcopy(likelihood_func.pvec[:])
+    bounds_penalty_list  = np.array(bounds_penalty_list, dtype=float)
 
     def penalty(x):
 
         penalty_val = 0.
         if prior_idx_list.size > 0:
-            penalty_val += np.sum(bounds_penalty_list * x[prior_idx_list]**2)
+            _x = x0_ref.copy()
+            _x[parm_idx_list] = x.copy()
+            penalty_val += np.sum(bounds_penalty_list[prior_idx_list] * _x[prior_idx_list]**2)
         return penalty_val
 
     def fun(x):
 
-        likelihood = likelihood_func(x, parm_idx_list=parm_idx_list, local=local_targets)
+        _x = x0_ref.copy()
+        _x[parm_idx_list] = x.copy()
+
+        likelihood = likelihood_func(_x, 
+            parm_idx_list=parm_idx_list, local=local_targets)
         AIC_score  = 2. * N_parms_all * parm_penalty - 2. * likelihood
         
         return AIC_score
 
     def grad_penalty(x):
 
-        grad = np.zeros_like(x)
+        grad = np.zeros_like(x0_ref)
         if prior_idx_list.size > 0:
-            grad[prior_idx_list] = bounds_penalty_list * 2. * x[prior_idx_list]
-        return grad
+            _x = x0_ref.copy()
+            _x[parm_idx_list] = x.copy()
+            grad[prior_idx_list] += bounds_penalty_list[prior_idx_list] * 2. * _x[prior_idx_list]
+
+        return grad[parm_idx_list]
 
     def grad(x):
 
-        _grad = likelihood_func.grad(x, 
+        _x = x0_ref.copy()
+        _x[parm_idx_list] = x.copy()
+
+        _grad = likelihood_func.grad(_x, 
             grad_diff=grad_diff, parm_idx_list=parm_idx_list,
             use_jac=False, local=local_targets)
         ### Multiply by -2. due to AIC definition
         _grad *= -2.
 
-        return _grad
+        return _grad[parm_idx_list]
 
-    if x0.size == 0:
-        _pvec_list_cp = [pvec.vector_k[:].copy() for pvec in pvec_list_cp]
-        if get_timing:
-            return fun(x0), _pvec_list_cp, bitvec_type_list, time.time() - time_start
-        else:
-            return fun(x0), _pvec_list_cp, bitvec_type_list
-
-    from scipy import optimize
-    _fun = lambda x: fun(x)+penalty(x)
-    _grad = lambda x: grad(x)+grad_penalty(x)
+    likelihood_func = LikelihoodVectorized(
+        pvec_min_list,
+        targetcomputer,
+        N_sys_per_batch = N_sys_per_likelihood_batch)
 
     if verbose:
-        print(
-            "Initial func value:",
-            _fun(x0),
-            )
         from .tools import benchmark_systems
         print(
             "SYSTEM BENCHMARK BEFORE MINIMIZATION")
         print(
             "====================================")
         benchmark_systems(
-            system_list_cp)
+            system_list_cp, only_global=True)
         for mngr_idx, pvec in enumerate(pvec_list_cp):
-            vec_str = [str(v) for v in pvec.vector_k]
-            print(f"MANAGER {mngr_idx}:")
-            print(f"==========")
-            print(",".join(vec_str))
+            vec_str  = [str(v) for v in pvec.vector_k]
+            vec0_str = [str(v) for v in pvec.vector_0]
 
-    from .constants import _OPT_METHOD
-    if use_global_opt:
-        #result = optimize.differential_evolution(
-        #   _fun,
-        #   [(-10,10) for _ in x0],
-        #   maxiter=100,)
-        result = optimize.basinhopping(
-                _fun,
-                x0,
-                minimizer_kwargs={
-                    "method"  : _OPT_METHOD,
-                    "jac"     : _grad,
-                    "options" : {
-                        "gtol"    : 1e-2,
-                        "maxiter" : 20 }
-                    },
-                niter=20)
+            print(f"MANAGER {mngr_idx} values:")
+            print(f"=================")
+            print(",".join(vec_str))
+            print(f"MANAGER {mngr_idx} prior centers:")
+            print(f"========================")
+            print(",".join(vec0_str))
+
+    search_space_list = list()
+    for idx, pvec in enumerate(pvec_min_list):
+        bounds = bounds_list[idx]
+        if isinstance(bounds, priors.BaseBounds):
+            lower_list, upper_list = bounds.get_bounds(pvec)
+            _l, _u = list(), list()
+            for i in range(pvec.force_group_count):
+                for j in range(pvec.parameters_per_force_group):
+                    _l.append(lower_list[i][j])
+                    _u.append(upper_list[i][j])
+            lower_trans = pvec.get_transform(_l * pvec.vector_units).tolist()
+            upper_trans = pvec.get_transform(_u * pvec.vector_units).tolist()
+            for _lu in zip(lower_trans, upper_trans):
+                _lu = list(_lu)
+                if abs(_lu[0]-_lu[1]) < 1.e-2:
+                    _lu[0] -= 2
+                    _lu[1] += 2
+                search_space_list.append(_lu)
+        else:
+            N = pvec.force_group_count * pvec.parameters_per_force_group
+            for _ in range(N):
+                search_space_list.append([-2,2])
+    search_space_list = np.array(search_space_list)
+
+    from scipy import optimize
+    for protocol in ["all"]:
+        if protocol == "k":
+            parm_idx_list  = parm_idx_list_k
+            prior_idx_list = prior_idx_list_k
+        elif protocol == "notk":
+            parm_idx_list  = parm_idx_list_notk
+            prior_idx_list = prior_idx_list_notk
+        elif protocol == "all":
+            parm_idx_list  = parm_idx_list_all
+            prior_idx_list = prior_idx_list_all
+        elif protocol == "notk_prior":
+            parm_idx_list  = parm_idx_list_all
+            prior_idx_list = prior_idx_list_notk
+        else:
+            raise ValueError(
+                f"protocol `{protocol}` not known.")
+
+        likelihood_func._initialize_systems()
+        x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
+        x0_ref = copy.deepcopy(likelihood_func.pvec[:])
+
+        from .constants import _OPT_METHOD
+        METHOD = "direct"
+        if use_global_opt:
+            _fun  = lambda x: fun(x)
+            _grad = lambda x: grad(x)
+
+            if METHOD == "differential_evolution":
+                result = optimize.differential_evolution(
+                   _fun, search_space_list[parm_idx_list].tolist(),
+                   maxiter=400,)
+            elif METHOD == "basinhopping":
+                result = optimize.basinhopping(
+                        _fun, x0,
+                        minimizer_kwargs={
+                            "method"  : _OPT_METHOD,
+                            "jac"     : _grad,
+                            "options" : {
+                                "gtol"    : 1e-2,
+                                "maxiter" : 20 }
+                            },
+                        niter=20)
+            elif METHOD == "direct":
+                result = optimize.direct(
+                        _fun, search_space_list[parm_idx_list].tolist(), 
+                        maxiter=400)
+            else:
+                raise NotImplementedError(
+                    f"method {METHOD} not implemented.")
+
+            ### Finish it up with a gradient based
+            ### local optimization. We will set the center
+            ### of the regularization to the value found
+            ### by the global optimizer
+            _x0 = x0_ref.copy()
+            _x0[parm_idx_list_all] = result.x
+            likelihood_func.apply_changes(_x0)
+
+            for pvec in pvec_min_list:
+                ### _vector_k_vec is like vector_k
+                ### but without units
+                vector_k      = pvec._vector_k_vec
+                pvec.vector_0 = vector_k
+
+            likelihood_func._initialize_systems()
+            x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
+            x0_ref = copy.deepcopy(likelihood_func.pvec[:])
+
+            _fun  = lambda x: fun(x)  + penalty(x)
+            _grad = lambda x: grad(x) + grad_penalty(x)
+
+            result = optimize.minimize(
+                _fun, x0, jac = _grad, 
+                method = _OPT_METHOD)
+        
+        else:
+            likelihood_func._initialize_systems()
+            x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
+            x0_ref = copy.deepcopy(likelihood_func.pvec[:])
+            _fun  = lambda x: fun(x)  + penalty(x)
+            _grad = lambda x: grad(x) + grad_penalty(x)
+            result = optimize.minimize(
+                _fun, x0, jac = _grad, 
+                method = _OPT_METHOD)
+
+        x_best = x0_ref.copy()
+        x_best[parm_idx_list] = result.x
+        likelihood_func.apply_changes(x_best)
     
-    else:
-        result = optimize.minimize(
-            _fun, 
-            x0, 
-            jac = _grad, 
-            method = _OPT_METHOD
-            )
-    
-    best_x = result.x
-    likelihood_func.apply_changes(best_x)
-    best_f  = _fun(best_x)
+    parm_idx_list = parm_idx_list_all
+    prior_idx_list = prior_idx_list_all
+    x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
+    best_f  = fun(x0)
 
     if verbose:
-        print(
-            "Final func value:",
-            best_f,
-            )
         from .tools import benchmark_systems
         print(
             "SYSTEM BENCHMARK AFTER MINIMIZATION")
         print(
             "===================================")
         benchmark_systems(
-            system_list_cp)
+            system_list_cp, only_global=True)
         for mngr_idx, pvec in enumerate(pvec_list_cp):
             vec_str = [str(v) for v in pvec.vector_k]
             print(f"MANAGER {mngr_idx}:")
@@ -607,12 +701,6 @@ def validate_FF(
         targetcomputer
         )
 
-    #if verbose:
-    #    print(
-    #        "Initial best AIC:", best_AIC)
-    #    print(
-    #        f"Checking {len(worker_id_dict)} solutions...")
-
     found_improvement = False
 
     ### For each system, find the best solution
@@ -686,7 +774,10 @@ def validate_FF(
                 )
             for idx, b in enumerate(bitvec_list):
                 new_AIC = AIC_list[idx]
-                accept  = new_AIC < best_AIC
+                if best_ast == None:
+                    accept = True
+                else:
+                    accept  = new_AIC < best_AIC
                 if accept:
                     pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
                     pvec_list_cp[mngr_idx_main].apply_changes()
@@ -717,7 +808,8 @@ def validate_FF(
             pvec_list_cp[mngr_idx].reset(
                 best_pvec_list[mngr_idx])
         benchmark_systems(
-            pvec_list_cp[0].parameter_manager.system_list)
+            pvec_list_cp[0].parameter_manager.system_list,
+            only_global=True)
 
     del pvec_list_cp
 
@@ -882,7 +974,7 @@ class BaseOptimizer(object):
         self.scaling_factor_list.append(scale_list)
 
         self.bounds_list.append(bounds)
-        self._bounds_penalty_list_work.append(bounds_penalty)
+        self._bounds_penalty_list_work.append(1.)
         self.bounds_penalty_list.append(bounds_penalty)
 
         ### Must increment at the end, not before.
@@ -939,10 +1031,9 @@ class BaseOptimizer(object):
                 if len(bitvec_dict) > 1:
                     for _ in range(len(bitvec_dict)-1):
                         pvec.duplicate(0)
-                if not isinstance(pvec, type(None)): 
-                    bounds.apply_pvec(pvec)
-                pvec[:] = np.random.normal(
-                        0., 0.01, size=pvec.size)
+            if not isinstance(pvec, type(None)): 
+                bounds.apply_pvec(pvec)
+                pvec[:] = 0.
                 pvec.apply_changes()
 
             bitvector_typing.BitSmartsManager.bond_ring = _bond_ring
@@ -1007,6 +1098,7 @@ class BaseOptimizer(object):
         system_idx_list = list(),
         as_copy = False,
         copy_include_systems = False,
+        adjust_scale = True,
         ):
 
         import copy
@@ -1029,10 +1121,20 @@ class BaseOptimizer(object):
                 mngr_idx, 
                 _system_idx_list
                 )
+            scaling_factor_list = list()
+            if adjust_scale:
+                p = self._bounds_penalty_list_work[mngr_idx]
+            else:
+                p = 1.
+            if p < 1.:
+                p = 1.
+            for s in self.scaling_factor_list[mngr_idx]: 
+                scaling_factor_list.append(s/p**2)
             pvec = ForceFieldParameterVector(
                 parm_mngr,
                 self.parameter_name_list[mngr_idx],
-                self.scaling_factor_list[mngr_idx],
+                #self.scaling_factor_list[mngr_idx],
+                scaling_factor_list,
                 exclude_others = self.exclude_others[mngr_idx]
                 )
 
@@ -1353,19 +1455,33 @@ class BaseOptimizer(object):
 
         if cluster_systems:
             centroid, label = cluster.vq.kmeans2(
-                    self.obs, N_sys_per_batch, minit='points', iter=500)
+                    self.obs, N_sys_per_batch, minit='random', iter=500)
             label_re = [list() for _ in range(N_sys_per_batch)]
+            dists    = [list() for _ in range(N_sys_per_batch)]
             for i in range(self.N_all_systems):
                 k = label[i]
                 label_re[k].append(i)
+                d = np.linalg.norm(centroid[k] - self.obs[i])
+                dists[k].append(d)
             system_idx_list_batch = tuple()
             for _ in range(N_batches):
                 sys_list = tuple()
                 for k in range(N_sys_per_batch):
-                    if len(label_re[k]) > 0:
-                        i = int(np.random.choice(label_re[k]))
-                    else:
+                    if len(label_re[k]) == 0:
                         i = int(np.random.randint(0, self.N_systems))
+                    elif len(label_re[k]) == 1:
+                        i = label_re[k][0]
+                    else:
+                        p = np.array(dists[k])
+                        _min = p.min()
+                        _max = p.max()
+                        p = (p - _min) / (_max - _min)
+                        p = 1. - p
+                        p = p/np.sum(p)
+                        if np.any(np.isnan(p)):
+                            p = None
+                        i = int(np.random.choice(label_re[k], p=p))
+                        
                     sys_list += (i,)
                 sys_list = list(sys_list)
                 sys_list = tuple(sorted(sys_list))
@@ -1430,7 +1546,7 @@ class BaseOptimizer(object):
         pvec_start_list=None,
         N_trials_gradient=5,
         split_all=False,
-        max_on=0.1,
+        max_on=_MAX_ON,
         max_splits=100,
         ):
 
@@ -1448,6 +1564,7 @@ class BaseOptimizer(object):
             system_idx_list,
             as_copy=True,
             copy_include_systems=True,
+            adjust_scale = False,
             )
         if not isinstance(pvec_start_list, type(None)):
             for _mngr_idx in range(self.N_mngr):
@@ -1470,20 +1587,29 @@ class BaseOptimizer(object):
 
             if len(selection_i) == 0:
                 continue
-            alloc_dict, smarts_dict, on_dict, subset_dict, bitvec_dict = bsm.and_rows(
-                max_iter = 3,
-                allocations = selection_i,
-                generate_smarts = False,
-                max_neighbor = 3,
-                max_on = max_on,
-                duplicate_removal = False,
-                verbose = self.verbose,
-                )
+            N_candidates = 0
+            _max_on = max_on
+            while N_candidates == 0:
+                alloc_dict, smarts_dict, on_dict, subset_dict, bitvec_dict = bsm.and_rows(
+                    max_iter = 3,
+                    allocations = selection_i,
+                    generate_smarts = False,
+                    max_neighbor = 3,
+                    max_on = _max_on,
+                    duplicate_removal = False,
+                    verbose = self.verbose,
+                    )
 
-            on_dict_sorted = sorted(on_dict.items(), key= lambda x: x[1])
+                on_dict_sorted = sorted(on_dict.items(), key= lambda x: x[1])
+                N_candidates = len(on_dict_sorted)
+                if N_candidates == 0:
+                    if self.verbose:
+                        print(
+                            f"Did not find any split candidates. Increasing `max_on`")
+                    _max_on += 0.01
             if self.verbose:
                 print(
-                    f"Found {len(on_dict_sorted)} candidate bitvectors for type {type_i} in mngr {mngr_idx} and systems {system_idx_list}."
+                    f"Found {N_candidates} candidate bitvectors for type {type_i} in mngr {mngr_idx} and systems {system_idx_list}."
                     )
 
             k_values_ij = np.zeros(
@@ -1960,9 +2086,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
                     #pvec_idx_min = [mngr_idx_main],
+                    pvec_idx_min = None,
                     local_targets = local_targets,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
-                    bounds_penalty = self._bounds_penalty_list_work,
+                    #bounds_penalty = self._bounds_penalty_list_work,
+                    bounds_penalty = [1. for _ in range(self.N_mngr)],
                     use_global_opt = _USE_GLOBAL_OPT,
                     verbose = self.verbose,
                     )
@@ -1975,8 +2103,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                 bitvec_type_list_id, 
                 self.bounds_list,
                 self.parm_penalty_split, 
-                mngr_idx_main, 
-                self._bounds_penalty_list_work[mngr_idx_main],
+                #mngr_idx_main, 
+                None,
+                #self._bounds_penalty_list_work,
+                [1. for _ in range(self.N_mngr)],
                 self._N_sys_per_likelihood_batch,
                 system_idx_list
                 )
@@ -2200,6 +2330,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             local_targets = False,
                             parm_penalty = 1.,
                             bounds_penalty = self._bounds_penalty_list_work,
+                            #bounds_penalty = [1. for _ in range(self.N_mngr)],
                             N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                             use_global_opt = _USE_GLOBAL_OPT,
                             verbose = self.verbose)
@@ -2256,7 +2387,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                 print(
                                     f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
                                     f"Found {len(votes_split_list)} candidate split solutions ...\n")
-                            
+
                     # N_sys_per_batch ---> N_systems_validation
                     # N_batches       ---> N_iter_validation
                     self.sys_idx_list_validation = self.get_random_system_idx_list(
@@ -2323,6 +2454,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     #pvec_idx_min = [mngr_idx],
                                     local_targets = False,
                                     bounds_penalty = self._bounds_penalty_list_work,
+                                    #bounds_penalty = [1. for _ in range(self.N_mngr)],
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_global_opt = _USE_GLOBAL_OPT,
                                     verbose = self.verbose)
@@ -2452,11 +2584,11 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 pvec_list_query = list()
                 bitvec_type_list_query = list()
-                if not isinstance(self.best_pvec_list, type(None)):
-                    pvec_list_query.append(
-                            self.best_pvec_list)
-                    bitvec_type_list_query.append(
-                            self.best_bitvec_type_list)
+                #if not isinstance(self.best_pvec_list, type(None)):
+                #    pvec_list_query.append(
+                #            self.best_pvec_list)
+                #    bitvec_type_list_query.append(
+                #            self.best_bitvec_type_list)
                 if self.verbose:
                     print(
                         "VALIDATION I: VOTES of SMARTS patterns on same parameter set.")
@@ -2573,6 +2705,27 @@ class ForceFieldOptimizer(BaseOptimizer):
                     _pvec = _pvec_list[0]
                     benchmark_systems(
                         _pvec.parameter_manager.system_list)
+                    from .tools import get_rmsd
+                    try:
+                        rmsd_dict = get_rmsd(
+                                _pvec.parameter_manager.system_list,
+                                self.system_manager_loader.optdataset_dict)
+                        rmsd_list = list()
+                        for smi in rmsd_dict:
+                            rmsd_list.extend(
+                                    rmsd_dict[smi])
+                        rmsd_list = np.array(rmsd_list)
+                        _rmsd     = np.sqrt(np.mean(rmsd_list**2))
+                        print(
+                                "GLOBAL ESTIMATE FOR POSITION RMSD")
+                        print(
+                                "=================================")
+                        print(
+                                f"{_rmsd:4.2f}")
+                        print()
+                    except:
+                        print(
+                            f"Could not compute RMSD.")
 
                 self.split_iteration_idx += 1
 

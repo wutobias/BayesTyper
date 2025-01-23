@@ -391,7 +391,7 @@ def run_geotarget(
                 rss_angle  += diff**2
                 diff_angles_list.append(diff)
             ### Torsions
-            if z_idx > 2 and z_idx not in dihedral_skip:
+            if (z_idx > 2) and (z_idx not in dihedral_skip):
                 if unit.is_quantity(target_zm[z_idx][2]):
                     target_val = target_zm[z_idx][2].value_in_unit(_ANGLE)
                 else:
@@ -614,7 +614,7 @@ def run_energytarget(
         _diff_avg = _diff / np.sum(target_denom)
         _rss = _diff_avg**2 / denom_ene**2
     else:
-        _rss  = _diff**2 / denom_ene**2
+        _rss = _diff**2 / denom_ene**2
 
     for strc_idx in range(N_strcs):
         if reference_to_lowest:

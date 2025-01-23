@@ -197,8 +197,10 @@ class ElementPrimitive(BasePrimitive):
             '#6',
             '#7',
             '#8',
+            '#15',
+            '#16'
         ]
-        
+
         self.un_orable = ["*"]
         self.un_negatable = ["*"]
         

@@ -130,6 +130,45 @@ def benchmark_systems(
     return results_dict
 
 
+def get_rmsd(system_list, optdataset_dict):
+
+    from BayesTyper.engines import OpenmmEngine
+    from BayesTyper.constants import _LENGTH_AU
+    from openmm import app
+    from openmm import unit
+    import mdtraj as md
+    import numpy as np
+
+    N_sys = len(system_list)
+    rmsd_dict = dict()
+    for sys_idx in range(N_sys):
+        sys = system_list[sys_idx]
+        smiles = sys.name
+        top    = md.Topology.from_openmm(
+                sys.top.to_openmm())
+        ### First frame one will be the reference frame
+        ### Second frame will be the query frame
+        traj     = md.Trajectory(
+                np.zeros((2, sys.N_atoms, 3)), top)
+        rmsd_dict[smiles] = list()
+        for conf_i in optdataset_dict[smiles]:
+            if not "final_geo"in optdataset_dict[smiles][conf_i]:
+                continue
+            xyz = optdataset_dict[smiles][conf_i]["final_geo"]
+            if not unit.is_quantity(xyz):
+                xyz *= _LENGTH_AU
+            engine = OpenmmEngine(
+                sys.openmm_system,
+                xyz)
+            engine.set_xyz(xyz)
+            engine.minimize()
+            traj.xyz[0] = xyz.value_in_unit(unit.nanometer)
+            traj.xyz[1] = engine.xyz.value_in_unit(unit.nanometer)
+            rmsd = md.lprmsd(traj, traj, frame=0)
+            rmsd_dict[smiles].append(rmsd.tolist()[1])
+
+    return rmsd_dict
+
 
 def write_pdb(system_list, optdataset_dict):
 
@@ -1136,18 +1175,22 @@ class SystemManagerLoader(object):
         CHUNK_SIZE = 1000
         smi_worker_list = list()
         worker_id_list = list()
-        optdataset_dict_id = ray.put(self.optdataset_dict)
+        #optdataset_dict_id = ray.put(self.optdataset_dict)
         for smi in self._query_smiles_list:
             if len(smi_worker_list) < CHUNK_SIZE:
                 smi_worker_list.append(smi)
             else:
+                #worker_id = generate_rdmol_dict.remote(
+                #        smi_worker_list, optdataset_dict_id)
                 worker_id = generate_rdmol_dict.remote(
-                        smi_worker_list, optdataset_dict_id)
+                        smi_worker_list, {_smi:self.optdataset_dict[_smi] for _smi in smi_worker_list})
                 worker_id_list.append(worker_id)
                 smi_worker_list = list()
         if len(smi_worker_list) > 0:
+            #worker_id = generate_rdmol_dict.remote(
+            #        smi_worker_list, optdataset_dict_id)
             worker_id = generate_rdmol_dict.remote(
-                    smi_worker_list, optdataset_dict_id)
+                    smi_worker_list, {_smi:self.optdataset_dict[_smi] for _smi in smi_worker_list})
             worker_id_list.append(worker_id)
             smi_worker_list = list()
 
@@ -1167,7 +1210,7 @@ class SystemManagerLoader(object):
                 else:
                     self.rdmol_to_smiles_map_dict[smi] = [smiles]
         self.smiles_list = list(self.rdmol_dict.keys())
-        del optdataset_dict_id
+        #del optdataset_dict_id
 
 
     def generate_systemmanager(self, smiles_list=None):

@@ -66,9 +66,22 @@ class BondBitvectorContainer(BaseBitvectorContainer):
 
     def _generate(self):
 
+        from .prior_data import bond_bounds_list as bounds_list
         from rdkit import Chem
 
-        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        for counts, bounds in enumerate(bounds_list):
+            sma = bounds[0]
+            self.rdmol_list.append(
+                    Chem.MolFromSmarts(sma))
+            self.atom_list.append([0,1])
+            self.force_ranks.append(counts)
+            self.system_idx_list.append(counts)
+
+        return
+
+        from rdkit import Chem
+
+        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
         bond_list = ["-", "=", "#", ":"]
         counts    = 0
 
@@ -103,9 +116,23 @@ class AngleBitvectorContainer(BaseBitvectorContainer):
 
     def _generate(self):
 
+        from .prior_data import angle_bounds_list as bounds_list
         from rdkit import Chem
 
-        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        for counts, bounds in enumerate(bounds_list):
+            sma = bounds[0]
+            self.rdmol_list.append(
+                    Chem.MolFromSmarts(sma))
+            self.atom_list.append([0,1,2])
+            self.force_ranks.append(counts)
+            self.system_idx_list.append(counts)
+
+        return
+
+
+        from rdkit import Chem
+
+        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
         bond_list = ["-", "=", "#", ":"]
         counts    = 0
 
@@ -153,7 +180,7 @@ class ProperTorsionBitvectorContainer(BaseBitvectorContainer):
 
         from rdkit import Chem
 
-        atom_list = ["#1", "#6", "#7", "#8", "#9"]
+        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
         bond_list = ["-", "=", "#", ":"]
         counts    = 0
 
@@ -470,7 +497,7 @@ class BitSmartsManager(object):
     aromatic_smarts = ["a", "A"]
     charge_smarts = ["-2", "-1", "+0", "+1", "+2"]
     #atom_smarts = ["!#1", "#1", "!#6", "#6", "#7", "#8", "#16"]
-    atom_smarts = ["#1", "#6", "#7", "#8", "#16"]
+    atom_smarts = ["#1", "#6", "#7", "#8", "#15", "#16"]
     #hydrogen_smarts = ["H1", "H2", "H3", "!H0", "!H1", "!H2", "!H3"]
     hydrogen_smarts = ["H1", "H2", "H3"]
     #conn_smarts = ["X0", "X1", "X2", "X3", "X4", "!X0", "!X1", "!X2", "!X3", "!X4"]
