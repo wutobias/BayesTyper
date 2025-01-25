@@ -454,16 +454,24 @@ def write_system(
 
 def from_qcschema(qcschema,
                   name="mol",
-                  FF_name=_DEFAULT_FF):
+                  FF_name=_DEFAULT_FF,
+                  partial_charges=None):
 
     offmol = Molecule.from_qcschema(
         qcschema, allow_undefined_stereo=True)
-    return from_offmol(offmol, name, FF_name)
+    use_charges = False
+    if not isinstance(partial_charges, type(None)):
+        from openff.units import unit
+        use_charges = True
+        offmol.partial_charges = partial_charges * unit.elementary_charge
+
+    return from_offmol(offmol, name, FF_name, use_charges)
 
 
 def from_offmol(offmol,
                 name="mol",
-                FF_name=_DEFAULT_FF):
+                FF_name=_DEFAULT_FF,
+                use_charges=False):
 
     offmol = copy.deepcopy(offmol)
     top    = offmol.to_topology()
@@ -482,8 +490,12 @@ def from_offmol(offmol,
             topology = top.to_openmm()
             )
     else:
+        charges_list = None
+        if use_charges:
+            charges_list = [offmol]
         from openff.toolkit.typing.engines.smirnoff import ForceField
         ff     = ForceField(FF_name)
-        openmm_system = ff.create_openmm_system(top)
+        openmm_system = ff.create_openmm_system(
+                top, charge_from_molecules=charges_list)
 
     return System(name, offmol, openmm_system, top)

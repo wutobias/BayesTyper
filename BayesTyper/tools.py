@@ -1001,18 +1001,19 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
 
 
 @ray.remote
-def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list):
+def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list, _partial_charges):
     from . import system
     import warnings
     try:
         system_list = [system.from_qcschema(
-            _qcentry, _smiles, _forcefield_name)]
+            _qcentry, _smiles, _forcefield_name, _partial_charges)]
         if remove_types_manager_list:
             remove_types(
                 system_list,
                 remove_types_manager_list)
         return system_list[0]
-    except:
+    except Exception as e:
+        print(e)
         warnings.warn(
             f"Could not build system {_smiles}")
         return None
@@ -1390,8 +1391,11 @@ def generate_systemmanager(
                 optdataset_dict[smiles].keys()
             )[0]
             if "qcentry" in optdataset_dict[smiles][key]:
+                partial_charges = None
+                if 'partial_charges' in optdataset_dict[smiles][key]:
+                    partial_charges = optdataset_dict[smiles][key]['partial_charges']
                 worker_id = parameterize_system.remote(
-                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id)
+                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
@@ -1403,8 +1407,11 @@ def generate_systemmanager(
                 torsiondataset_dict[smiles][key0].keys()
             )[0]
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
+                partial_charges = None
+                if 'partial_charges' in optdataset_dict[smiles][key]:
+                    partial_charges = optdataset_dict[smiles][key]['partial_charges']
                 worker_id = parameterize_system.remote(
-                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id)
+                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
