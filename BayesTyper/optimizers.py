@@ -21,6 +21,7 @@ from .constants import (_LENGTH,
                         _EPSILON,
                         _EPSILON_GS,
                         _USE_GLOBAL_OPT,
+                        _GLOBAL_TOP_METHOD,
                         _MAX_ON
                         )
 from .ray_tools import retrieve_failed_workers
@@ -539,7 +540,7 @@ def minimize_FF(
         x0_ref = copy.deepcopy(likelihood_func.pvec[:])
 
         from .constants import _OPT_METHOD
-        METHOD = "direct"
+        METHOD = _GLOBAL_TOP_METHOD
         if use_global_opt:
             _fun  = lambda x: fun(x)
             _grad = lambda x: grad(x)
