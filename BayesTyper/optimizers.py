@@ -536,8 +536,6 @@ def minimize_FF(
                 f"protocol `{protocol}` not known.")
 
         likelihood_func._initialize_systems()
-        x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
-        x0_ref = copy.deepcopy(likelihood_func.pvec[:])
 
         from .constants import _OPT_METHOD
         METHOD = _GLOBAL_TOP_METHOD
@@ -545,22 +543,25 @@ def minimize_FF(
             _fun  = lambda x: fun(x)
             _grad = lambda x: grad(x)
 
+            x0 = copy.deepcopy(likelihood_func.pvec[:])
+            x0_ref = copy.deepcopy(likelihood_func.pvec[:])
+
             ### Make sure that x0 is within bounds of the
             ### search space.
             for idx in range(len(x0)):
                 if x0[idx] < search_space_list[idx][0]:
-                    x0[idx] = search_space_list[idx][0] + 0.01
+                    x0[idx] = search_space_list[idx][0] + 0.1
                 elif x0[idx] > search_space_list[idx][1]:
-                    x0[idx] = search_space_list[idx][1] - 0.01
+                    x0[idx] = search_space_list[idx][1] - 0.1
 
             if METHOD == "differential_evolution":
                 result = optimize.differential_evolution(
                    _fun, search_space_list[parm_idx_list].tolist(),
-                   polish = False, x0=x0,
+                   polish = False, x0=x0[parm_idx_list],
                    maxiter=500,)
             elif METHOD == "basinhopping":
                 result = optimize.basinhopping(
-                        _fun, x0,
+                        _fun, x0[parm_idx_list],
                         minimizer_kwargs={
                             "method"  : _OPT_METHOD,
                             "jac"     : _grad,
