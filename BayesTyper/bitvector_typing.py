@@ -667,7 +667,7 @@ class BitSmartsManager(object):
                             sma_in = f"[!{sma}]"
                         query_rdmol.ReplaceAtom(
                             atom_idx,
-                            Chem.AtomFromSmarts(sma_in)
+                            Chem.AtomFromSmartss(ma_in)
                         )
                         key = (f"!{sma}", layer, tag)
                         self.smarts_dict[key] = query_rdmol.GetMol()
@@ -764,6 +764,7 @@ class BitSmartsManager(object):
 
     def generate(self, ring_safe=True):
 
+        import warnings
         import numpy as np
 
         all_primitives_dict = get_primitives(
@@ -853,6 +854,9 @@ class BitSmartsManager(object):
                                 if ring_safe:
                                     if n == tag_idx:
                                         continue
+                                ### This block makes sure that we are mapping the
+                                ### bits of the different primitives consistently
+                                ### over different neighbors.
                                 _key1 = (layer, tag, r)
                                 _key2 = n
                                 if _key1 in primitive_n_dict:
@@ -864,6 +868,10 @@ class BitSmartsManager(object):
                                 else:
                                     primitive_n_dict[_key1] = {_key2 : 0}
                                 _key_id = primitive_n_dict[_key1][_key2]
+                                if _key_id >= self._max_neighbor:
+                                    warnings.warn(
+                                        f"Found atom with more neighbors than `max_neighbor`.")
+                                    continue
                                 k       = mapped_idx_list[_key_id]
                                 self.primitive_binary_neighbor[r][k] = 1
 
