@@ -548,7 +548,8 @@ def minimize_FF(
             if METHOD == "differential_evolution":
                 result = optimize.differential_evolution(
                    _fun, search_space_list[parm_idx_list].tolist(),
-                   maxiter=400,)
+                   polish = False, x0=x0,
+                   maxiter=500,)
             elif METHOD == "basinhopping":
                 result = optimize.basinhopping(
                         _fun, x0,
@@ -556,14 +557,12 @@ def minimize_FF(
                             "method"  : _OPT_METHOD,
                             "jac"     : _grad,
                             "options" : {
-                                "gtol"    : 1e-2,
-                                "maxiter" : 20 }
-                            },
-                        niter=20)
+                                "gtol"    : 1e-2}
+                            })
             elif METHOD == "direct":
                 result = optimize.direct(
                         _fun, search_space_list[parm_idx_list].tolist(), 
-                        maxiter=400)
+                        maxiter=500)
             else:
                 raise NotImplementedError(
                     f"method {METHOD} not implemented.")
@@ -912,6 +911,8 @@ class BaseOptimizer(object):
                         system_manager._system_list[sys_idx])
                 self.system_name_list.append(smi)
             else:
+                self.system_list.append(None)
+                self.system_name_list.append(smi)
                 warnings.warn(
                         f"Could not load system {smi}")
 
@@ -919,10 +920,17 @@ class BaseOptimizer(object):
     def set_targetcomputer(self, system_idx_list, error_factor=1.):
 
         from .targets import TargetComputer
+        from .system import System
 
         for sys_idx_pair in system_idx_list:
+            system_list = list()
+            for sys_idx in sys_idx_pair:
+                if not isinstance(self.system_list[sys_idx], System):
+                    continue
+                system_list.append(
+                    self.system_list[sys_idx])
             targetcomputer = TargetComputer(
-                [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                system_list,
                 target_type_list=None,
                 error_factor=error_factor)
             self.targetcomputer_id_dict[sys_idx_pair] = ray.put(
@@ -1187,6 +1195,7 @@ class BaseOptimizer(object):
         ):
         
         import numpy as np
+        from .system import System
 
         if len(system_idx_list) == 0:
             _system_idx_list = list(range(self.N_systems))
@@ -1198,11 +1207,13 @@ class BaseOptimizer(object):
             sys_dict = dict()
             if isinstance(sys_idx, int):
                 sys = self.system_list[sys_idx]
-                sys_dict[sys.name, sys_idx] = sys.openmm_system
+                if isinstance(sys, System):
+                    sys_dict[sys.name, sys_idx] = sys.openmm_system
             else:
                 for _sys_idx in sys_idx:
                     sys = self.system_list[_sys_idx]
-                    sys_dict[sys.name, _sys_idx] = sys.openmm_system
+                    if isinstance(sys, System):
+                        sys_dict[sys.name, _sys_idx] = sys.openmm_system
             targetcomputer = ray.get(self.targetcomputer_id_dict[sys_idx])
             worker_id = targetcomputer(sys_dict, False)
             worker_id_dict[worker_id] = sys_idx
@@ -1292,6 +1303,7 @@ class BaseOptimizer(object):
 
         import copy
         import ray
+        from .system import System
 
         _CHUNK_SIZE = 20
 
@@ -1316,7 +1328,10 @@ class BaseOptimizer(object):
             s_list   = tuple()
             idx_list = tuple()
             for sys_idx in _system_idx_list:
-                s_list   += (self.system_list[sys_idx],)
+                sys = self.system_list[sys_idx]
+                if not isinstance(sys, System):
+                    continue
+                s_list   += (sys,)
                 idx_list += (sys_idx,)
                 if len(s_list) == _CHUNK_SIZE:
                     worker_id = generate_parameter_manager.remote(
@@ -1333,7 +1348,10 @@ class BaseOptimizer(object):
                 _parm_mngr = ray.get(worker_id)
                 parm_mngr.add_parameter_manager(_parm_mngr)
                 for sys_idx in idx_list:
-                    parm_mngr.system_list[sys_counts] = self.system_list[sys_idx]
+                    sys = self.system_list[sys_idx]
+                    if not isinstance(sys, System):
+                        continue
+                    parm_mngr.system_list[sys_counts] = sys
                     sys_counts += 1
             self.parm_mngr_cache_dict[key] = parm_mngr
 
@@ -1519,7 +1537,7 @@ class BaseOptimizer(object):
         ### sys_map_dict maps from smiles_list ordering
         ### to system_list ordering
         sys_map_dict = dict()
-        for sys_idx, sys in enumerate(self.system_list):
+        for sys_idx, _ in enumerate(self.system_list):
             ### sys_idx in `self.system_list` counting
             ### `self.smiles_list` in system_idx_list_batch
             name = self.system_name_list[sys_idx]
@@ -2054,10 +2072,9 @@ class ForceFieldOptimizer(BaseOptimizer):
         if len(system_idx_list) == 0:
             system_idx_list = list(range(self.N_systems))
 
-        system_list = [self.system_list[sys_idx] for sys_idx in system_idx_list]
         pvec_all, bitvec_type_list = self.generate_parameter_vectors(
-            system_idx_list,
-            )
+            system_idx_list)
+        system_list = pvec_all[0].parameter_manager.system_list
 
         system_list_id = ray.put(system_list)
         bitvec_type_list_id = ray.put(bitvec_type_list)
@@ -2218,10 +2235,16 @@ class ForceFieldOptimizer(BaseOptimizer):
             restart = False
         if not hasattr(self, "best_aic_dict"):
             restart = False
+        if not hasattr(self, "_optimization_generator_smiles_list"):
+            restart = False
+        if not hasattr(self, "_validation_generator_smiles_list"):
+            restart = False
         if not hasattr(self, "_N_sys_per_likelihood_batch"):
             self._N_sys_per_likelihood_batch = 4
 
         if not restart:
+            self._optimization_generator_smiles_list = list()
+            self._validation_generator_smiles_list = list()
             self.system_idx_list_batch = []
             self.minscore_worker_id_dict = dict()
             self.selection_worker_id_dict = dict()
@@ -2268,9 +2291,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                         # N_batches       ---> N_iter_validation
                         self.system_idx_list_batch = self.get_random_system_idx_list(
                             N_sys_per_batch_split, N_batches, cluster_systems)
+                        self._optimization_generator_smiles_list = copy.deepcopy(
+                            self._generator_smiles_list)
                 else:
                     self._set_system_list(
-                        self._generator_smiles_list)
+                        self._optimization_generator_smiles_list)
                 self.set_targetcomputer(
                     self.system_idx_list_batch,
                     error_factor=(1.-error_decrease_factor)**iteration_idx)
@@ -2393,6 +2418,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     # N_batches       ---> N_iter_validation
                     self.sys_idx_list_validation = self.get_random_system_idx_list(
                             N_systems_validation, N_iter_validation, cluster_systems)
+                    self._validation_generator_smiles_list = copy.deepcopy(
+                        self._generator_smiles_list)
                     self.set_targetcomputer(
                         self.sys_idx_list_validation,
                         error_factor=(1.-error_decrease_factor)**iteration_idx)
@@ -2465,7 +2492,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                                    sys_idx_pair
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
-
+                    self._set_system_list(self._generator_smiles_list)
                     self.set_targetcomputer(
                         self.sys_idx_list_validation,
                         error_factor=(1.-error_decrease_factor)**iteration_idx)
