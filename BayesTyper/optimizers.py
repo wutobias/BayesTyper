@@ -2467,6 +2467,10 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                         del split_worker_id_dict[mngr_idx,sys_idx_pair]
 
+                    with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-SELECTION.pickle", "wb") as fopen:
+                        pickle.dump(
+                            self,
+                            fopen)
                     
                 ### If we want to restart, first make sure that we re-run all
                 ### the left-over minimization runs
@@ -2530,11 +2534,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                             if (mngr_idx, sys_idx_pair) not in self.selection_worker_id_dict:
                                 self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                             self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
-
-                with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-SELECTION.pickle", "wb") as fopen:
-                    pickle.dump(
-                        self,
-                        fopen)
 
                 ### ============= ###
                 ### END SPLITTING ###
@@ -2602,6 +2601,17 @@ class ForceFieldOptimizer(BaseOptimizer):
                 for mngr_idx in range(self.N_mngr):
                     best_ast_vote_dict[mngr_idx]  = dict()
                     best_pvec_vote_dict[mngr_idx] = dict()
+                
+                ### Sometimes no value is found for a given 
+                ### combination of mngr_idx, sys_idx_validation
+                key_list = list(self.best_ast_dict.keys())
+                for key in key_list:
+                    value = self.best_ast_dict[key]
+                    if isinstance(value, type(None)):
+                        del self.best_ast_dict[key]
+                        del self.best_aic_dict[key]
+                        del self.best_pvec_dict[key]
+
                 for mngr_idx, sys_idx_validation in self.best_ast_dict:
                     best_ast, sys_idx_pair = self.best_ast_dict[mngr_idx, sys_idx_validation]
                     if (best_ast, sys_idx_pair) in best_ast_vote_dict[mngr_idx]:
