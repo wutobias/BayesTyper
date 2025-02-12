@@ -316,7 +316,7 @@ def get_gradient_scores(
     return grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict
 
 
-@ray.remote(num_cpus=0.1)
+@ray.remote(num_cpus=0.5)
 def minimize_FF(
     system_list,
     targetcomputer,
@@ -641,7 +641,7 @@ def minimize_FF(
         return best_f, _pvec_list_cp, bitvec_type_list
 
 
-@ray.remote(num_cpus=0.1)
+@ray.remote(num_cpus=0.5)
 def validate_FF(
     mngr_idx_main,
     pvec_list,
@@ -2308,7 +2308,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 self.set_targetcomputer(
                     self.system_idx_list_batch,
                     error_factor=(1.-error_decrease_factor)**iteration_idx)
-                if optimize_system_ordering:
+                if optimize_system_ordering and not restart:
                     if self.verbose:
                         print(
                             "Initial ordering of systems:",
@@ -2346,10 +2346,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                             "Optimized ordering of systems:",
                             self.system_idx_list_batch)
 
-                if self.verbose:
-                    print(
-                        "Optimize parameters.")
                 if not restart:
+                    if self.verbose:
+                        print(
+                            "Optimize parameters.")
                     minimize_initial_worker_id_dict = dict()
                     for sys_idx_pair in self.system_idx_list_batch:
                         pvec_list, _ = self.generate_parameter_vectors(
@@ -2472,10 +2472,10 @@ class ForceFieldOptimizer(BaseOptimizer):
                             self,
                             fopen)
                     
-                ### If we want to restart, first make sure that we re-run all
-                ### the left-over minimization runs
                 if restart:
                     _minscore_worker_id_dict = dict()
+                    ### If we want to restart, first make sure that we re-run all
+                    ### the left-over minimization runs
                     for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
@@ -2505,7 +2505,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                                    sys_idx_pair
                             _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
-                    self._set_system_list(self._generator_smiles_list)
+                    self._set_system_list(
+                        self._validation_generator_smiles_list)
                     self.set_targetcomputer(
                         self.sys_idx_list_validation,
                         error_factor=(1.-error_decrease_factor)**iteration_idx)
@@ -2536,7 +2537,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
 
                 ### ============= ###
-                ### END SPLITTING ###
+                ### END SPLITTING ###/
                 ### ============= ###
 
                 ### ================ ###
@@ -2546,7 +2547,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                 if self.verbose:
                     print(
                         "Finding best parameters.")
-                self.system_idx_list_batch = self.system_idx_list_batch[::-1]
+                if not restart:
+                    self.system_idx_list_batch = self.system_idx_list_batch[::-1]
                 selection_list = list(self.selection_worker_id_dict.keys())
                 for mngr_idx, sys_idx_pair in selection_list:
                     selection_worker_id_list = list(
