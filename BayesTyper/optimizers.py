@@ -712,6 +712,8 @@ def validate_FF(
 
     found_improvement = False
 
+    allocation_failure_counts = 0
+    all_counts                = 0
     ### For each system, find the best solution
     worker_id_list = list(worker_id_dict.keys())
     while worker_id_list:
@@ -747,7 +749,9 @@ def validate_FF(
                 pvec_list_cp[mngr_idx].reset(
                     _pvec_list[mngr_idx],
                     pvec_list_cp[mngr_idx].allocations)
+            all_counts += 1
             if allocation_failure:
+                allocation_failure_counts += 1
                 continue
 
             bitvec_list = list()
@@ -808,6 +812,8 @@ def validate_FF(
                     bitvec_type_list_list_initial[mngr_idx])
         
     if verbose:
+        print(
+               f"{allocation_failure_counts} from {all_counts} allocation attempts failed.")
         from .tools import benchmark_systems
         print(
             "SYSTEM BENCHMARK DURING VALIDATION")
