@@ -713,10 +713,14 @@ def validate_FF(
     found_improvement = False
 
     allocation_failure_counts = 0
-    all_counts                = 0
+    allocation_all_counts     = 0
+    minimization_failure_counts = 0
+    minimization_all_counts     = 0
     ### For each system, find the best solution
     worker_id_list = list(worker_id_dict.keys())
     while worker_id_list:
+
+        minimization_all_counts += 1
 
         worker_id, worker_id_list = ray.wait(
             worker_id_list)
@@ -729,94 +733,98 @@ def validate_FF(
                 import traceback
                 print(traceback.format_exc())
             failed = True
-        if not failed:
+        if failed:
+            minimization_failure_counts += 1
+            continue
 
-            all_counts += 1
+        allocation_all_counts += 1
 
-            args = worker_id_dict[worker_id[0]]
-            ast, _, _, _, _, _, _, _, _, _, _ = args
-            _, _, (type_i, type_j) = ast
+        args = worker_id_dict[worker_id[0]]
+        ast, _, _, _, _, _, _, _, _, _, _ = args
+        _, _, (type_i, type_j) = ast
 
-            allocation_failure = False
-            for mngr_idx in range(N_mngr):
-                allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
-                bitvec_hierarchy_to_allocations(
-                    bitvec_alloc_dict_list[mngr_idx], 
-                    bitvec_type_all_list[mngr_idx],
-                    allocations
-                    )
-                if allocations.count(-1) > 0:
-                    allocation_failure = True
-                pvec_list_cp[mngr_idx].allocations[:] = allocations
-                pvec_list_cp[mngr_idx].reset(
-                    _pvec_list[mngr_idx],
-                    pvec_list_cp[mngr_idx].allocations)
-
-            if allocation_failure:
-                allocation_failure_counts += 1
-                continue
-
-            bitvec_list = list()
-            alloc_list  = list()
-            for b in bitvec_dict[ast]:
-                bitvec_type_list_list_cp[mngr_idx_main].insert(
-                    type_j, b
-                    )
-
-                allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
-                bitvec_hierarchy_to_allocations(
-                    bitvec_alloc_dict_list[mngr_idx_main], 
-                    bitvec_type_list_list_cp[mngr_idx_main],
-                    allocations
-                    )
-                N_types = pvec_list_cp[mngr_idx_main].force_group_count
-                if (allocations.count(-1) == 0) and (max(allocations) < N_types):
-                    allocs = tuple(allocations)
-                    if allocs not in alloc_list:
-                        alloc_list.append(
-                            allocs
-                            )
-                        bitvec_list.append(b)
-                bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
-            if len(alloc_list) == 0:
-                allocation_failure_counts += 1
-                continue
-
-            AIC_list = _calculate_AIC(
-                pvec_list_cp,
-                mngr_idx_main,
-                alloc_list,
-                targetcomputer
+        allocation_failure = False
+        for mngr_idx in range(N_mngr):
+            allocations = [0 for _ in pvec_list_cp[mngr_idx].allocations]
+            bitvec_hierarchy_to_allocations(
+                bitvec_alloc_dict_list[mngr_idx], 
+                bitvec_type_all_list[mngr_idx],
+                allocations
                 )
-            for idx, b in enumerate(bitvec_list):
-                new_AIC = AIC_list[idx]
-                if best_ast == None:
-                    accept = True
-                else:
-                    accept  = new_AIC < best_AIC
-                if accept:
-                    pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
-                    pvec_list_cp[mngr_idx_main].apply_changes()
-                    best_AIC       = new_AIC
-                    best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
-                    best_ast       = ast
+            if allocations.count(-1) > 0:
+                allocation_failure = True
+            pvec_list_cp[mngr_idx].allocations[:] = allocations
+            pvec_list_cp[mngr_idx].reset(
+                _pvec_list[mngr_idx],
+                pvec_list_cp[mngr_idx].allocations)
 
-                    best_bitvec_type_list_list = copy.deepcopy(
-                            bitvec_type_list_list_cp)
-                    best_bitvec_type_list_list[mngr_idx_main].insert(
-                        type_j, b)
+        if allocation_failure:
+            allocation_failure_counts += 1
+            continue
 
-                    found_improvement = True
+        bitvec_list = list()
+        alloc_list  = list()
+        for b in bitvec_dict[ast]:
+            bitvec_type_list_list_cp[mngr_idx_main].insert(
+                type_j, b
+                )
 
-            for mngr_idx in range(N_mngr):
-                pvec_list_cp[mngr_idx].reset(
-                    pvec_list_initial[mngr_idx])
-                bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
-                    bitvec_type_list_list_initial[mngr_idx])
-        
+            allocations = [-1 for _ in pvec_list_cp[mngr_idx_main].allocations]
+            bitvec_hierarchy_to_allocations(
+                bitvec_alloc_dict_list[mngr_idx_main], 
+                bitvec_type_list_list_cp[mngr_idx_main],
+                allocations
+                )
+            N_types = pvec_list_cp[mngr_idx_main].force_group_count
+            if (allocations.count(-1) == 0) and (max(allocations) < N_types):
+                allocs = tuple(allocations)
+                if allocs not in alloc_list:
+                    alloc_list.append(
+                        allocs
+                        )
+                    bitvec_list.append(b)
+            bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
+        if len(alloc_list) == 0:
+            allocation_failure_counts += 1
+            continue
+
+        AIC_list = _calculate_AIC(
+            pvec_list_cp,
+            mngr_idx_main,
+            alloc_list,
+            targetcomputer
+            )
+        for idx, b in enumerate(bitvec_list):
+            new_AIC = AIC_list[idx]
+            if best_ast == None:
+                accept = True
+            else:
+                accept  = new_AIC < best_AIC
+            if accept:
+                pvec_list_cp[mngr_idx_main].allocations[:] = alloc_list[idx]
+                pvec_list_cp[mngr_idx_main].apply_changes()
+                best_AIC       = new_AIC
+                best_pvec_list = [pvec.copy() for pvec in pvec_list_cp]
+                best_ast       = ast
+
+                best_bitvec_type_list_list = copy.deepcopy(
+                        bitvec_type_list_list_cp)
+                best_bitvec_type_list_list[mngr_idx_main].insert(
+                    type_j, b)
+
+                found_improvement = True
+
+        for mngr_idx in range(N_mngr):
+            pvec_list_cp[mngr_idx].reset(
+                pvec_list_initial[mngr_idx])
+            bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
+                bitvec_type_list_list_initial[mngr_idx])
+
     if verbose:
         print(
-               f"{allocation_failure_counts} of {all_counts} allocation attempts failed.")
+               f"{allocation_failure_counts} of {allocation_all_counts} allocation attempts failed.")
+        print(
+               f"{minimization_failure_counts} of {minimization_all_counts} minimization attempts failed.")
         from .tools import benchmark_systems
         print(
             "SYSTEM BENCHMARK DURING VALIDATION")
