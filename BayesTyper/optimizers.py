@@ -731,6 +731,8 @@ def validate_FF(
             failed = True
         if not failed:
 
+            all_counts += 1
+
             args = worker_id_dict[worker_id[0]]
             ast, _, _, _, _, _, _, _, _, _, _ = args
             _, _, (type_i, type_j) = ast
@@ -749,7 +751,7 @@ def validate_FF(
                 pvec_list_cp[mngr_idx].reset(
                     _pvec_list[mngr_idx],
                     pvec_list_cp[mngr_idx].allocations)
-            all_counts += 1
+
             if allocation_failure:
                 allocation_failure_counts += 1
                 continue
@@ -768,7 +770,7 @@ def validate_FF(
                     allocations
                     )
                 N_types = pvec_list_cp[mngr_idx_main].force_group_count
-                if allocations.count(-1) == 0 and max(allocations) < N_types:
+                if (allocations.count(-1) == 0) and (max(allocations) < N_types):
                     allocs = tuple(allocations)
                     if allocs not in alloc_list:
                         alloc_list.append(
@@ -777,6 +779,7 @@ def validate_FF(
                         bitvec_list.append(b)
                 bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
             if len(alloc_list) == 0:
+                allocation_failure_counts += 1
                 continue
 
             AIC_list = _calculate_AIC(
@@ -813,7 +816,7 @@ def validate_FF(
         
     if verbose:
         print(
-               f"{allocation_failure_counts} from {all_counts} allocation attempts failed.")
+               f"{allocation_failure_counts} of {all_counts} allocation attempts failed.")
         from .tools import benchmark_systems
         print(
             "SYSTEM BENCHMARK DURING VALIDATION")
