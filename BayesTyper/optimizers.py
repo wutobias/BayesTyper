@@ -2595,8 +2595,6 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                             if found_improvement_mngr:
                                 self.best_aic_dict[mngr_idx, sys_idx_validation]  = new_AIC
-                                ### If `new_ast` is `None`, then it means that we have not
-                                ### found anything that performs better then the initial model
                                 self.best_ast_dict[mngr_idx, sys_idx_validation]  = new_ast, sys_idx_pair
                                 self.best_pvec_dict[mngr_idx, sys_idx_validation] = [pvec[:].copy() for pvec in pvec_list], best_bitvec_type_list
 
@@ -2623,10 +2621,15 @@ class ForceFieldOptimizer(BaseOptimizer):
                 
                 ### Sometimes no value is found for a given 
                 ### combination of mngr_idx, sys_idx_validation
+                ### because minimizations fail or other things happen.
                 key_list = list(self.best_ast_dict.keys())
                 for key in key_list:
                     value = self.best_ast_dict[key]
                     if isinstance(value, type(None)):
+                        del self.best_ast_dict[key]
+                        del self.best_aic_dict[key]
+                        del self.best_pvec_dict[key]
+                    elif isinstance(value[0], type(None)):
                         del self.best_ast_dict[key]
                         del self.best_aic_dict[key]
                         del self.best_pvec_dict[key]
@@ -2729,7 +2732,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
                 if self.verbose:
                     old_pvec_list, _ = self.generate_parameter_vectors(
-                            system_idx_list=[0])
+                            system_idx_list=self.sys_idx_list_validation[0])
                 for mngr_idx in range(self.N_mngr):
                     candidate_idx = best_selection[mngr_idx]
                     pvec_list = pvec_list_query[candidate_idx]
