@@ -2418,27 +2418,27 @@ class ForceFieldOptimizer(BaseOptimizer):
                     if self.verbose:
                         print(
                             "Obtaining votes and submitting parameter minimizations.")
-                    for mngr_idx in range(self.N_mngr):
-                        for sys_idx_pair in self.system_idx_list_batch:
-                            votes_split_list = self.get_votes(
-                                worker_id_dict = split_worker_id_dict[mngr_idx,sys_idx_pair][0],
-                                low_to_high = True,
-                                abs_grad_score = False,
-                                norm_cutoff = 1.e-2,
-                                keep_N_best = keep_N_best)
-                            self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
-                                mngr_idx_main=mngr_idx,
-                                system_idx_list=sys_idx_pair,
-                                votes_split_list=votes_split_list,
-                                local_targets=False)
-                            self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
-                            for ast in votes_split_list:
-                                b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
-                                self.bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
-                            if self.verbose:
-                                print(
-                                    f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
-                                    f"Found {len(votes_split_list)} candidate split solutions ...\n")
+                    for key in split_worker_id_dict:
+                        mngr_idx, sys_idx_pair = key
+                        votes_split_list = self.get_votes(
+                            worker_id_dict = split_worker_id_dict[mngr_idx,sys_idx_pair][0],
+                            low_to_high = True,
+                            abs_grad_score = False,
+                            norm_cutoff = 1.e-2,
+                            keep_N_best = keep_N_best)
+                        self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
+                            mngr_idx_main=mngr_idx,
+                            system_idx_list=sys_idx_pair,
+                            votes_split_list=votes_split_list,
+                            local_targets=False)
+                        self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
+                        for ast in votes_split_list:
+                            b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
+                            self.bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
+                        if self.verbose:
+                            print(
+                                f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
+                                f"Found {len(votes_split_list)} candidate split solutions ...\n")
 
                     # N_sys_per_batch ---> N_systems_validation
                     # N_batches       ---> N_iter_validation
@@ -2455,32 +2455,32 @@ class ForceFieldOptimizer(BaseOptimizer):
                             self.best_pvec_dict[mngr_idx, sys_idx_validation] = None
                             self.best_aic_dict[mngr_idx, sys_idx_validation]  = None
 
-                    for mngr_idx in range(self.N_mngr):
-                        for sys_idx_pair in self.system_idx_list_batch:
-                            b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
-                            if (mngr_idx, sys_idx_pair) in self.selection_worker_id_dict:
-                                del self.selection_worker_id_dict[mngr_idx, sys_idx_pair]
-                            for sys_idx_validation in self.sys_idx_list_validation:
-                                old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
-                                        system_idx_list=sys_idx_validation)
-                                bitvec_alloc_dict_list = list()
-                                for _mngr_idx in range(self.N_mngr):
-                                    _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
-                                            _mngr_idx, sys_idx_validation)
-                                    bitvec_alloc_dict_list.append(bitvec_alloc_dict)
-                                worker_id = validate_FF.remote(
-                                    mngr_idx_main = mngr_idx,
-                                    pvec_list = old_pvec_list,
-                                    targetcomputer = self.targetcomputer_id_dict[sys_idx_validation],
-                                    bitvec_dict = b_list,
-                                    bitvec_alloc_dict_list = bitvec_alloc_dict_list,
-                                    bitvec_type_list_list = old_bitvec_type_list,
-                                    worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
-                                    parm_penalty = self.parm_penalty_split,
-                                    verbose = self.verbose)
-                                if (mngr_idx, sys_idx_pair) not in self.selection_worker_id_dict:
-                                    self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
-                                self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
+                    for key in self.bitvec_dict:
+                        mngr_idx, sys_idx_pair = key
+                        b_list = self.bitvec_dict[mngr_idx, sys_idx_pair]
+                        if (mngr_idx, sys_idx_pair) in self.selection_worker_id_dict:
+                            del self.selection_worker_id_dict[mngr_idx, sys_idx_pair]
+                        for sys_idx_validation in self.sys_idx_list_validation:
+                            old_pvec_list, old_bitvec_type_list = self.generate_parameter_vectors(
+                                    system_idx_list=sys_idx_validation)
+                            bitvec_alloc_dict_list = list()
+                            for _mngr_idx in range(self.N_mngr):
+                                _, bitvec_alloc_dict = self.generate_bitsmartsmanager(
+                                        _mngr_idx, sys_idx_validation)
+                                bitvec_alloc_dict_list.append(bitvec_alloc_dict)
+                            worker_id = validate_FF.remote(
+                                mngr_idx_main = mngr_idx,
+                                pvec_list = old_pvec_list,
+                                targetcomputer = self.targetcomputer_id_dict[sys_idx_validation],
+                                bitvec_dict = b_list,
+                                bitvec_alloc_dict_list = bitvec_alloc_dict_list,
+                                bitvec_type_list_list = old_bitvec_type_list,
+                                worker_id_dict = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair],
+                                parm_penalty = self.parm_penalty_split,
+                                verbose = self.verbose)
+                            if (mngr_idx, sys_idx_pair) not in self.selection_worker_id_dict:
+                                self.selection_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
+                            self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = sys_idx_validation
 
                         del split_worker_id_dict[mngr_idx,sys_idx_pair]
 
@@ -2662,6 +2662,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     print(
                         "VALIDATION I: VOTES of SMARTS patterns on same parameter set.")
                 for mngr_idx in range(self.N_mngr):
+                    if mngr_idx not in best_ast_vote_dict:
+                        continue
                     best_ast_sysidx_list = sorted(
                             best_ast_vote_dict[mngr_idx],
                         key=best_ast_vote_dict[mngr_idx].get,
