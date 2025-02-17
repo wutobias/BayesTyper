@@ -2183,6 +2183,12 @@ class ForceFieldOptimizer(BaseOptimizer):
         optimize_system_ordering=True,
         ### Keep the `keep_N_best` solutions for each split
         keep_N_best = 10,
+        ### Do a maximum of `N_max_splits` splits per parameter
+        ### manager and batch of systems
+        N_max_splits = 100,
+        ### Maximum percentage of on-bits to be used as a cutoff
+        ### during the `and`-based bitvector search.
+        max_on = _MAX_ON,
         ### Offset for numbering the output files
         output_offset = 0,
         ### Should we try to pickup this run from where we stopped last time?
@@ -2406,6 +2412,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                                         sys_idx_pair,
                                         pvec_start_list=pvec_list_cp,
                                         N_trials_gradient=N_trials_gradient,
+                                        max_splits=N_max_splits,
+                                        max_on=max_on,
                                         split_all=True)
                             del minimize_initial_worker_id_dict[worker_id[0]]
                             failed = False
