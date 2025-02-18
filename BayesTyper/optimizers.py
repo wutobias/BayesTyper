@@ -2218,6 +2218,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         from .draw_bitvec import draw_bitvector_from_candidate_list
         from .bitvector_typing import bitvec_hierarchy_to_allocations
+        from .system import System
         import pickle
          
         ### 100 attempts to build initial type
