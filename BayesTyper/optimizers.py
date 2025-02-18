@@ -2225,7 +2225,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         for _ in range(100):
             smi = np.random.choice(self.smiles_list)
             self._set_system_list([smi])
-            if len(self.system_list) > 0:
+            if len(self.system_list) > 0 and isinstance(self.system_list[-1], System):
                 found_system = True
                 break
         if not found_system:
@@ -2377,8 +2377,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                     for sys_idx_pair in self.system_idx_list_batch:
                         pvec_list, _ = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
+                        _system_list = list()
+                        for sys_idx in sys_idx_pair:
+                            sys = self.system_list[sys_idx]
+                            if isinstance(sys, System):
+                                _system_list.append(sys)
                         worker_id = minimize_FF.remote(
-                            system_list = [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
+                            system_list = _system_list,
                             targetcomputer = self.targetcomputer_id_dict[sys_idx_pair],
                             pvec_list = pvec_list,
                             bitvec_type_list = list(),
@@ -2506,7 +2511,12 @@ class ForceFieldOptimizer(BaseOptimizer):
                             system_idx_list=sys_idx_pair)
                         pvec_all_id = ray.put(pvec_list)
                         bitvec_type_list_id = ray.put(bitvec_type_list)
-                        system_list_id = ray.put([self.system_list[sys_idx] for sys_idx in sys_idx_pair])
+                        _system_list = list()
+                        for sys_idx in sys_idx_pair:
+                            sys = self.system_list[sys_idx]
+                            if isinstance(sys, System):
+                                _system_list.append(sys)
+                        system_list_id = ray.put(system_list_id)
 
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                         for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
