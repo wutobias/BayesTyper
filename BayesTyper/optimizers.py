@@ -558,7 +558,7 @@ def minimize_FF(
                 result = optimize.differential_evolution(
                    _fun, search_space_list[parm_idx_list].tolist(),
                    polish = False, x0=x0[parm_idx_list],
-                   maxiter=500,)
+                   maxiter=1000,)
             elif METHOD == "basinhopping":
                 result = optimize.basinhopping(
                         _fun, x0[parm_idx_list],
@@ -571,7 +571,7 @@ def minimize_FF(
             elif METHOD == "direct":
                 result = optimize.direct(
                         _fun, search_space_list[parm_idx_list].tolist(), 
-                        maxiter=500)
+                        maxiter=1000)
             else:
                 raise NotImplementedError(
                     f"method {METHOD} not implemented.")
