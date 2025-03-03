@@ -2517,7 +2517,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             sys = self.system_list[sys_idx]
                             if isinstance(sys, System):
                                 _system_list.append(sys)
-                        system_list_id = ray.put(system_list_id)
+                        system_list_id = ray.put(_system_list)
 
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                         for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
@@ -2731,6 +2731,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                     results_dict = ray.get(worker_id)
                     
                     sys_idx_validation = worker_id_dict[worker_id]
+                    if not results_dict:
+                        continue
                     best_selection = min(results_dict, key=results_dict.get)
                     if best_selection in best_likelihood_vote_dict:
                         best_likelihood_vote_dict[best_selection] += 1
