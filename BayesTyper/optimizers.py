@@ -101,7 +101,9 @@ def likelihood_combine_pvec(
                 bitvec_type_list_query[candidate_idx][mngr_idx],
                 allocations)
             if allocations.count(-1) == 0:
-                max_alloc = len(pvec_list_query[candidate_idx][mngr_idx]) - 1
+                max_alloc  = len(pvec_list_query[candidate_idx][mngr_idx])
+                max_alloc  = int(max_alloc/ref_pvec_cp[mngr_idx].parameters_per_force_group)
+                max_alloc -= 1
                 if max(allocations) > max_alloc:
                     failed = True
                 else:
