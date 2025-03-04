@@ -2751,13 +2751,21 @@ class ForceFieldOptimizer(BaseOptimizer):
                         print(
                             " / ".join(output_str) + f" : N VOTES {N_votes} AIC MIN {aic_min_dict[best_selection]}")
 
-                best_selection = max(
-                    best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
+                if best_likelihood_vote_dict:
+                    best_selection = max(
+                        best_likelihood_vote_dict, key=best_likelihood_vote_dict.get)
+                else:
+                    best_selection = [None] * self.N_mngr
                 if self.verbose:
                     old_pvec_list, _ = self.generate_parameter_vectors(
                             system_idx_list=self.sys_idx_list_validation[0])
                 for mngr_idx in range(self.N_mngr):
                     candidate_idx = best_selection[mngr_idx]
+                    if isinstance(candidate_idx, type(None)):
+                        if self.verbose:
+                            print(
+                                    f"Not updating mngr {mngr_idx}")
+                        continue
                     pvec_list = pvec_list_query[candidate_idx]
                     bitvec_type_list = bitvec_type_list_query[candidate_idx]
                     self.update_best(
