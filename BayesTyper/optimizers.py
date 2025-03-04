@@ -101,10 +101,14 @@ def likelihood_combine_pvec(
                 bitvec_type_list_query[candidate_idx][mngr_idx],
                 allocations)
             if allocations.count(-1) == 0:
-                ref_pvec_cp[mngr_idx].allocations[:] = allocations[:]
-                ref_pvec_cp[mngr_idx].reset(
-                        pvec_list_query[candidate_idx][mngr_idx],
-                        ref_pvec_cp[mngr_idx].allocations)
+                max_alloc = len(pvec_list_query[candidate_idx][mngr_idx]) - 1
+                if max(allocations) > max_alloc:
+                    failed = True
+                else:
+                    ref_pvec_cp[mngr_idx].allocations[:] = allocations[:]
+                    ref_pvec_cp[mngr_idx].reset(
+                            pvec_list_query[candidate_idx][mngr_idx],
+                            ref_pvec_cp[mngr_idx].allocations)
             else:
                 failed = True
             N_parms_all += ref_pvec_cp[mngr_idx].size
