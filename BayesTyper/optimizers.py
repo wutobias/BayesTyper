@@ -765,6 +765,9 @@ def validate_FF(
                 pvec_list_cp[mngr_idx].allocations)
 
         if allocation_failure:
+            for mngr_idx in range(N_mngr):
+                pvec_list_cp[mngr_idx].reset(
+                    pvec_list_initial[mngr_idx])
             allocation_failure_counts += 1
             continue
 
@@ -791,6 +794,9 @@ def validate_FF(
                     bitvec_list.append(b)
             bitvec_type_list_list_cp[mngr_idx_main].pop(type_j)
         if len(alloc_list) == 0:
+            for mngr_idx in range(N_mngr):
+                bitvec_type_list_list_cp[mngr_idx] = copy.deepcopy(
+                        bitvec_type_list_list_initial[mngr_idx])
             allocation_failure_counts += 1
             continue
 
@@ -2647,6 +2653,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 ### Sometimes no value is found for a given 
                 ### combination of mngr_idx, sys_idx_validation
                 ### because minimizations fail or other things happen.
+                ### Also, sometimes the number of types in the bitvector
+                ### list and the number of physical parameter values
+                ### don't match. We want to remove these cases.
                 key_list = list(self.best_ast_dict.keys())
                 for key in key_list:
                     value = self.best_ast_dict[key]
@@ -2654,10 +2663,23 @@ class ForceFieldOptimizer(BaseOptimizer):
                         del self.best_ast_dict[key]
                         del self.best_aic_dict[key]
                         del self.best_pvec_dict[key]
+                        continue
                     elif isinstance(value[0], type(None)):
                         del self.best_ast_dict[key]
                         del self.best_aic_dict[key]
                         del self.best_pvec_dict[key]
+                        continue
+                    _old_pvec , _ = self.generate_parameter_vectors(
+                            system_idx_list=self.sys_idx_list_validation[0])
+                    _pvec_list, _bitvec_type_list = self.best_pvec_dict[key]
+                    for mngr_idx in range(self.N_mngr):
+                        N_parms = len(_pvec_list[mngr_idx][:])/_old_pvec[mngr_idx].parameters_per_force_group
+                        N_parms = int(N_parms)
+                        if N_parms != len(_bitvec_type_list[mngr_idx]):
+                            del self.best_ast_dict[key]
+                            del self.best_aic_dict[key]
+                            del self.best_pvec_dict[key]
+                            break
 
                 for mngr_idx, sys_idx_validation in self.best_ast_dict:
                     best_ast, sys_idx_pair = self.best_ast_dict[mngr_idx, sys_idx_validation]
