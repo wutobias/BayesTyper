@@ -212,7 +212,7 @@ def ungroup_forces(parameter_manager, perturbation=None):
         parameter_manager.remove_force_group(0)
 
 
-@ray.remote(num_cpus=0.1)
+@ray.remote(num_cpus=1)
 def get_gradient_scores(
     ff_parameter_vector,
     targetcomputer,
@@ -322,7 +322,7 @@ def get_gradient_scores(
     return grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict
 
 
-@ray.remote(num_cpus=0.5)
+@ray.remote(num_cpus=1)
 def minimize_FF(
     system_list,
     targetcomputer,
@@ -647,7 +647,7 @@ def minimize_FF(
         return best_f, _pvec_list_cp, bitvec_type_list
 
 
-@ray.remote(num_cpus=0.5)
+@ray.remote(num_cpus=1)
 def validate_FF(
     mngr_idx_main,
     pvec_list,
