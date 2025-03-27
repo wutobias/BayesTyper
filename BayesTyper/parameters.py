@@ -12,6 +12,7 @@ import numpy as np
 import copy
 import openmm
 from openmm import unit
+from rdkit import Chem
 import ray
 from .constants import _UNIT_QUANTITY
 from .tools import is_type_or_raise
@@ -1699,12 +1700,12 @@ class AngleManager(ParameterManager):
                     atm_idxs[0],
                     atm_idxs[1],
                     atm_idxs[2],
-                    0. * _ANGLE,
+                    90. * _ANGLE,
                     0. * _FORCE_CONSTANT_ANGLE)
                 forcecontainer_list.append(
                     self.forcecontainer(
                         {
-                            'angle' : 0. * _ANGLE,
+                            'angle' : 90. * _ANGLE,
                             'k'     : 0. * _FORCE_CONSTANT_ANGLE,
                         },
                         self.exclude_list,
@@ -1942,6 +1943,7 @@ class ProperTorsionManager(ParameterManager):
             )
         self.inactive_forcecontainer.is_active = False
 
+
     def build_forcecontainer_list(
         self, 
         force: openmm.Force, 
@@ -1958,7 +1960,7 @@ class ProperTorsionManager(ParameterManager):
                 continue
             if self.phase != parms[5]:
                 continue
-            atm_idxs  = parms[:4]
+            atm_idxs = parms[:4]
             is_proper = True
             for i in range(3):
                 neighbor_list = system.get_neighbor_atomidxs(atm_idxs[i])
@@ -2082,10 +2084,27 @@ class MultiProperTorsionManager(ParameterManager):
         force: openmm.Force, 
         system: System) -> list:
 
+        exclusion_patterns = [
+            "[*:1]-[*:2]#[*:3]-[*:4]",
+            "[*:1]-[*:2]-[*:3]#[*:4]",
+            "[*:1]~[*:2]=[#6,#7,#16,#15;X2:3]=[*:4]",
+        ]
+
+        exclusion_matches = tuple()
+        for pattern in exclusion_patterns:
+            query   = Chem.MolFromSmarts(pattern)
+            exclusion_matches += system.rdmol.GetSubstructMatches(query)
+
+        exclusion_atom_idxs = list()
         initial_atom_dict = dict()
         for dihedral_idx in range(force.getNumTorsions()):
             parms = force.getTorsionParameters(dihedral_idx)
             atm_idxs = list(parms[:4])
+            if tuple(atm_idxs) in exclusion_matches:
+                exclusion_atom_idxs.append(atm_idxs)
+            if tuple(atm_idxs[::-1]) in exclusion_matches:
+                exclusion_atom_idxs.append(atm_idxs[::-1])
+
             if (atm_idxs in system.proper_dihedrals) or (atm_idxs[::-1] in system.proper_dihedrals):
                 is_proper = True
                 for i in range(3):
@@ -2119,6 +2138,10 @@ class MultiProperTorsionManager(ParameterManager):
             if not is_proper:
                 continue
             atm_idxs = tuple(atm_idxs)
+            exclude  = False
+            if (atm_idxs in exclusion_atom_idxs) or (atm_idxs[::-1] in exclusion_atom_idxs):
+                exclude = True
+
             parms_dict = {}
             counts = 0
             dihedral_idx_list = list()
@@ -2128,36 +2151,48 @@ class MultiProperTorsionManager(ParameterManager):
                 periodicity = parms_dict[f"periodicity{counts}"]
                 phase = parms_dict[f"phase{counts}"]
                 key = (atm_idxs, periodicity, phase.value_in_unit(_ANGLE))
+                is_new = False
                 if key in initial_atom_dict:
                     dihedral_idx, k = initial_atom_dict[key]
                 else:
-                    dihedral_idx = None
+                    is_new = True
                     k = 0. * _FORCE_CONSTANT_TORSION
-                parms_dict[f"k{counts}"] = k
+                if exclude:
+                    k = 0. * _FORCE_CONSTANT_TORSION
 
-                if dihedral_idx == None:
+                if is_new:
                     dihedral_idx = force.addTorsion(
                         atm_idxs[0],
                         atm_idxs[1],
                         atm_idxs[2],
                         atm_idxs[3],
                         periodicity,
-                        phase,
-                        0. * _FORCE_CONSTANT_TORSION
+                        phase, k, # k is zero
+                        )
+                if exclude:
+                    force.setTorsionParameters(
+                        dihedral_idx,
+                        atm_idxs[0],
+                        atm_idxs[1],
+                        atm_idxs[2],
+                        atm_idxs[3],
+                        periodicity,
+                        phase, k, # k is zero
                         )
                 dihedral_idx_list.append(dihedral_idx)
-
+                parms_dict[f"k{counts}"] = k
                 counts += 1
 
-            forcecontainer_list.append(
-                self.forcecontainer(
-                    parms_dict,
-                    self.exclude_list,
+            if not exclude:
+                forcecontainer_list.append(
+                    self.forcecontainer(
+                        parms_dict,
+                        self.exclude_list,
+                        )
                     )
-                )
 
-            atom_list.append(atm_idxs)
-            force_entity_list.append(dihedral_idx_list)
+                atom_list.append(atm_idxs)
+                force_entity_list.append(dihedral_idx_list)
 
         return forcecontainer_list, atom_list, force_entity_list
 

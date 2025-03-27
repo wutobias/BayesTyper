@@ -82,17 +82,6 @@ class BaseBounds(object):
                     atom_list_set = set()
                     atom_list_set.add(tuple(atom_list))
                     atom_list_set.add(tuple(atom_list[::-1]))
-                    #for _ in range(N_atoms):
-                    #    a = atom_list.pop(0)
-                    #    atom_list.append(a)
-                    #    atom_list_set.add(tuple(atom_list))
-                    #if N_atoms == 3:
-                    #    a = atom_list.pop(1)
-                    #    atom_list.append(a)
-                    #    for _ in range(N_atoms):
-                    #        a = atom_list.pop(0)
-                    #        atom_list.append(a)
-                    #        atom_list_set.add(tuple(atom_list))
                     ### The default for `match_idx` is 0, meaning
                     ### that the first reference type is always type 0.
                     ### Which must be something like [*:1]~[*:2]

@@ -1,6 +1,7 @@
 import ray
 from .constants import _TIMEOUT, _VERBOSE
 from .ray_tools import retrieve_failed_workers
+import numpy as np
 
 
 class BaseBitvectorContainer:
@@ -17,6 +18,23 @@ class BaseBitvectorContainer:
 
         self.N_allocs = 0
         self.N_atoms  = 0
+
+        self.atom_list       = np.array(self.atom_list)
+        self.force_ranks     = np.array(self.force_ranks)
+        self.system_idx_list = np.array(self.system_idx_list)
+
+    @property
+    def force_entity_count(self):
+
+        return self.force_ranks.size
+
+    @property
+    def max_rank(self):
+
+        if self.force_entity_count == 0:
+            return -1
+        else:
+            return int(np.max(self.force_ranks))
 
     def _generate(self):
 
@@ -57,7 +75,16 @@ class BaseBitvectorContainer:
 
 class BondBitvectorContainer(BaseBitvectorContainer):
 
-    def __init__(self):
+    def __init__(self, sma_list=None):
+
+        if isinstance(sma_list, type(None)):
+            from .prior_data import bond_bounds_list as bounds_list
+            self.sma_list = list()
+            for bounds in bounds_list:
+                sma = bounds[0]
+                self.sma_list.append(sma)
+        else:
+            self.sma_list = sma_list
 
         super().__init__()
 
@@ -69,8 +96,7 @@ class BondBitvectorContainer(BaseBitvectorContainer):
         from .prior_data import bond_bounds_list as bounds_list
         from rdkit import Chem
 
-        for counts, bounds in enumerate(bounds_list):
-            sma = bounds[0]
+        for counts, sma in enumerate(self.sma_list):
             self.rdmol_list.append(
                     Chem.MolFromSmarts(sma))
             self.atom_list.append([0,1])
@@ -79,35 +105,44 @@ class BondBitvectorContainer(BaseBitvectorContainer):
 
         return
 
-        from rdkit import Chem
-
-        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
-        bond_list = ["-", "=", "#", ":"]
-        counts    = 0
-
-        sma_list = list()
-        for i, a1 in enumerate(atom_list):
-            for a2 in atom_list[i:]:
-                for b in bond_list:
-                    if a1 == "#1" or a2 == "#1":
-                        if b != "-":
-                            continue
-                    sma = f"[{a1}]{b}[{a2}]"
-                    if sma not in sma_list:
-                        sma_list.append(sma)
-                        rdmol = Chem.MolFromSmarts(sma)
-                        self.rdmol_list.append(rdmol)
-                        self.atom_list.append(
-                            [0,1])
-                        self.force_ranks.append(counts)
-                        self.system_idx_list.append(counts)
-    
-                        counts += 1
+#        from rdkit import Chem
+#
+#        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
+#        bond_list = ["-", "=", "#", ":"]
+#        counts    = 0
+#
+#        sma_list = list()
+#        for i, a1 in enumerate(atom_list):
+#            for a2 in atom_list[i:]:
+#                for b in bond_list:
+#                    if a1 == "#1" or a2 == "#1":
+#                        if b != "-":
+#                            continue
+#                    sma = f"[{a1}]{b}[{a2}]"
+#                    if sma not in sma_list:
+#                        sma_list.append(sma)
+#                        rdmol = Chem.MolFromSmarts(sma)
+#                        self.rdmol_list.append(rdmol)
+#                        self.atom_list.append(
+#                            [0,1])
+#                        self.force_ranks.append(counts)
+#                        self.system_idx_list.append(counts)
+#    
+#                        counts += 1
 
 
 class AngleBitvectorContainer(BaseBitvectorContainer):
 
-    def __init__(self):
+    def __init__(self, sma_list=None):
+
+        if isinstance(sma_list, type(None)):
+            from .prior_data import angle_bounds_list as bounds_list
+            self.sma_list = list()
+            for bounds in bounds_list:
+                sma = bounds[0]
+                self.sma_list.append(sma)
+        else:
+            self.sma_list = sma_list
 
         super().__init__()
 
@@ -116,11 +151,9 @@ class AngleBitvectorContainer(BaseBitvectorContainer):
 
     def _generate(self):
 
-        from .prior_data import angle_bounds_list as bounds_list
         from rdkit import Chem
 
-        for counts, bounds in enumerate(bounds_list):
-            sma = bounds[0]
+        for counts, sma in enumerate(self.sma_list):
             self.rdmol_list.append(
                     Chem.MolFromSmarts(sma))
             self.atom_list.append([0,1,2])
@@ -130,46 +163,63 @@ class AngleBitvectorContainer(BaseBitvectorContainer):
         return
 
 
-        from rdkit import Chem
-
-        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
-        bond_list = ["-", "=", "#", ":"]
-        counts    = 0
-
-        sma_list = list()
-        for a1 in atom_list:
-            for a2 in atom_list:
-                for a3 in atom_list:
-                    for b1 in bond_list:
-                        for b2 in bond_list:
-                            sma1 = f"[{a1}]{b1}[{a2}]{b2}[{a3}]"
-                            sma2 = f"[{a3}]{b2}[{a2}]{b1}[{a1}]"
-                            if sma1 in sma_list:
-                                continue
-                            if sma2 in sma_list:
-                                continue
-                            if a2 == "#1":
-                                continue
-                            if "=" in [b1, b2] and "#" in [b1, b2]:
-                                continue
-                            if a1 == "#1" and b1 != "-":
-                                continue
-                            if a3 == "#1" and b2 != "-":
-                                continue
-                            sma_list.append(sma1)
-                            rdmol = Chem.MolFromSmarts(sma1)
-                            self.rdmol_list.append(rdmol)
-                            self.atom_list.append(
-                                [0,1,2])
-                            self.force_ranks.append(counts)
-                            self.system_idx_list.append(counts)
-
-                            counts += 1
+#        from rdkit import Chem
+#
+#        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
+#        bond_list = ["-", "=", "#", ":"]
+#        counts    = 0
+#
+#        sma_list = list()
+#        for a1 in atom_list:
+#            for a2 in atom_list:
+#                for a3 in atom_list:
+#                    for b1 in bond_list:
+#                        for b2 in bond_list:
+#                            sma1 = f"[{a1}]{b1}[{a2}]{b2}[{a3}]"
+#                            sma2 = f"[{a3}]{b2}[{a2}]{b1}[{a1}]"
+#                            if sma1 in sma_list:
+#                                continue
+#                            if sma2 in sma_list:
+#                                continue
+#                            if a2 == "#1":
+#                                continue
+#                            if "=" in [b1, b2] and "#" in [b1, b2]:
+#                                continue
+#                            if a1 == "#1" and b1 != "-":
+#                                continue
+#                            if a3 == "#1" and b2 != "-":
+#                                continue
+#                            sma_list.append(sma1)
+#                            rdmol = Chem.MolFromSmarts(sma1)
+#                            self.rdmol_list.append(rdmol)
+#                            self.atom_list.append(
+#                                [0,1,2])
+#                            self.force_ranks.append(counts)
+#                            self.system_idx_list.append(counts)
+#
+#                            counts += 1
 
 
 class ProperTorsionBitvectorContainer(BaseBitvectorContainer):
 
-    def __init__(self):
+    def __init__(self, sma_list=None):
+
+        if isinstance(sma_list, type(None)):
+            atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
+            bond_list = ["-", "=", "#", ":"]
+            counts    = 0
+            self.sma_list = list()
+            for i, a1 in enumerate(atom_list):
+                for a2 in atom_list[i:]:
+                    for b in bond_list:
+                        if a1 == "#1" or a2 == "#1":
+                            if b != "-":
+                                continue
+                        sma = f"[*]~[{a1}]{b}[{a2}]~[*]"
+                        if sma not in self.sma_list:
+                            self.sma_list.append(sma)
+        else:
+            self.sma_list = sma_list
 
         super().__init__()
 
@@ -180,28 +230,13 @@ class ProperTorsionBitvectorContainer(BaseBitvectorContainer):
 
         from rdkit import Chem
 
-        atom_list = ["#1", "#6", "#7", "#8", "#15", "#16"]
-        bond_list = ["-", "=", "#", ":"]
-        counts    = 0
-
-        sma_list = list()
-        for i, a1 in enumerate(atom_list):
-            for a2 in atom_list[i:]:
-                for b in bond_list:
-                    if a1 == "#1" or a2 == "#1":
-                        if b != "-":
-                            continue
-                    sma = f"[*]~[{a1}]{b}[{a2}]~[*]"
-                    if sma not in sma_list:
-                        sma_list.append(sma)
-                        rdmol = Chem.MolFromSmarts(sma)
-                        self.rdmol_list.append(rdmol)
-                        self.atom_list.append(
-                            [0,1,2,3])
-                        self.force_ranks.append(counts)
-                        self.system_idx_list.append(counts)
-
-                        counts += 1
+        for counts, sma in enumerate(self.sma_list):
+            rdmol = Chem.MolFromSmarts(sma)
+            self.rdmol_list.append(rdmol)
+            self.atom_list.append(
+                [0,1,2,3])
+            self.force_ranks.append(counts)
+            self.system_idx_list.append(counts)
 
 
 def get_primitives(rdmol_list, smarts_dict, atom_idx_list, query_query_matches=False):
@@ -568,7 +603,10 @@ class BitSmartsManager(object):
 
         self.N_atoms = parameter_manager.N_atoms
 
-        self.N_allocs    = np.max(parameter_manager.force_ranks) + 1
+        if parameter_manager.force_entity_count > 0 :
+            self.N_allocs = np.max(parameter_manager.force_ranks) + 1
+        else:
+            self.N_allocs = 0
         self.rdmol_list  = parameter_manager.rdmol_list
         self.atom_list   = np.array(parameter_manager.atom_list)
         self.rank_list   = np.array(parameter_manager.force_ranks)
