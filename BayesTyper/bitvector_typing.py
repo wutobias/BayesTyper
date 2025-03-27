@@ -19,7 +19,6 @@ class BaseBitvectorContainer:
         self.N_allocs = 0
         self.N_atoms  = 0
 
-        self.atom_list       = np.array(self.atom_list)
         self.force_ranks     = np.array(self.force_ranks)
         self.system_idx_list = np.array(self.system_idx_list)
 
