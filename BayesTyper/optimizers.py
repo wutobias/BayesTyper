@@ -1560,7 +1560,9 @@ class BaseOptimizer(object):
                         if np.any(np.isnan(p)):
                             p = None
                         i = int(np.random.choice(label_re[k], p=p))
-                    sys_list += (i,)
+                    if i not in sys_list:
+                        sys_list += (i,)
+                        k += 1
                     N_iter += 1
                     if k == N_sys_per_batch:
                         break
