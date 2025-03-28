@@ -1522,7 +1522,7 @@ class BaseOptimizer(object):
         import copy
         import numpy as np
 
-        if (int(N_sys_per_batch) >= int(self.N_systems)) or (int(self.N_all_systems) == 1):
+        if (int(N_sys_per_batch) >= int(self.N_all_systems)) or (int(self.N_all_systems) == 1):
             N_batches = 1
             N_sys_per_batch = self.N_all_systems
             cluster_systems = False
