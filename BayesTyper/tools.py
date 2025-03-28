@@ -1003,7 +1003,10 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
 @ray.remote
 def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list, _partial_charges):
     from . import system
+    ### Filter warnings here, because openmm-interchange will generate
+    ### lots of bondhandler upconversion warnings.
     import warnings
+    warnings.filterwarnings('ignore')
     try:
         system_list = [system.from_qcschema(
             _qcentry, _smiles, _forcefield_name, _partial_charges)]
@@ -1014,7 +1017,7 @@ def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manage
         return system_list[0]
     except Exception as e:
         print(e)
-        warnings.warn(
+        print(
             f"Could not build system {_smiles}")
         return None
 

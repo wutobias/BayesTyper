@@ -730,7 +730,6 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
 
         return self.parameter_manager.N_systems
 
-    
     def swap_types(self, source_index, target_index):
 
         if source_index == -1:
@@ -1071,23 +1070,50 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         return self.force_group_count
 
 
-    def duplicate(self, force_group_idx):
+    def duplicate(self, force_group_idx, insert_idx=-1):
 
         import copy
 
         if force_group_idx == -1:
             force_group_idx = self.force_group_count - 1
+        if insert_idx == -1:
+            insert_idx = self.force_group_count
 
-        v0 = self._vector_0.vector_values * self._vector_units
-        parm_1 = force_group_idx * self.parameters_per_force_group
-        parm_2 = parm_1 + self.parameters_per_force_group
+        force_group_idx = int(force_group_idx)
+        insert_idx      = int(insert_idx)
+
+        assert 0 <= force_group_idx < self.force_group_count
+        assert 0 <= insert_idx <= self.force_group_count
+
+        v0    = self._vector_0.vector_values * self._vector_units
+        start = force_group_idx * self.parameters_per_force_group
+        stop  = start + self.parameters_per_force_group
         self.add_force_group(
-            copy.deepcopy(v0[parm_1:parm_2]))
+                copy.deepcopy(v0[start:stop]))
 
-        force_group_idx = self.force_group_count - 1
-        _parm_1 = force_group_idx * self.parameters_per_force_group
-        _parm_2 = _parm_1 + self.parameters_per_force_group
-        self[_parm_1:_parm_2] = self[parm_1:parm_2]
+        values   = self[:].copy()
+        values_0 = self.vector_0[:].copy()
+        for idx in range(self.force_group_count):
+            if idx == insert_idx:
+                get_idx = force_group_idx
+                set_idx = idx
+            elif idx > insert_idx:
+                get_idx = idx - 1
+                set_idx = idx
+            else:
+                get_idx = idx
+                set_idx = idx
+            start = get_idx * self.parameters_per_force_group
+            stop  = start + self.parameters_per_force_group
+            self.set_parameters_by_force_group(
+                    set_idx,
+                    copy.deepcopy(values[start:stop]),
+                    copy.deepcopy(values_0[start:stop]),
+                    )
+
+        valids = self.allocations[:] >= insert_idx
+        self.allocations[valids] += 1
+        self.apply_changes()
 
 
     def remove(self, force_group_idx):

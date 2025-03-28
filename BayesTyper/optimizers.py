@@ -7,6 +7,7 @@ from .bitvector_typing import BitSmartsManager
 
 from .constants import (_LENGTH,
                         _ANGLE,
+                        _ANGLE_DEG,
                         _ATOMIC_MASS,
                         _ENERGY_PER_MOL,
                         _WAVENUMBER,
@@ -244,8 +245,7 @@ def get_gradient_scores(
 
     type_j = type_i + 1
 
-    ff_parameter_vector_cp.duplicate(type_i)
-    ff_parameter_vector_cp.swap_types(N_types, type_j)
+    ff_parameter_vector_cp.duplicate(type_i, type_j)
 
     first_parm_i = type_i * N_parms
     last_parm_i  = first_parm_i + N_parms
@@ -336,8 +336,7 @@ def minimize_FF(
     system_list,
     targetcomputer,
     pvec_list,
-    frozen_types,
-    inserted_type_list,
+    frozen_types_list,
     bitvec_type_list,
     bounds_list,
     parm_penalty,
@@ -388,18 +387,32 @@ def minimize_FF(
         pvec_min_list.append(pvec)
         ### Look for dead parameters
         hist = pvec.force_group_histogram
-        offset = 0
         for type_i in range(pvec.force_group_count):
-            if type_i in inserted_type_list[pvec_idx]:
-                offset += 1
-            ### [b0, b1, b2]
-            ### [t0, t1, t2, t3]
-            b = bitvec_type_list[pvec_idx][type_i-offset]
-            if b in frozen_types[pvec_idx]:
-                continue
-            if hist[type_i] == 0:
-                continue
+            b = bitvec_type_list[pvec_idx][type_i]
             for idx in range(pvec.parameters_per_force_group):
+                freeze_parm = False
+                ### We want to check if b is a child of a frozen type.
+                ### Including the b itself.
+                for _b in frozen_types_list[pvec_idx]:
+                    ### b is subset of _b
+                    if _b == (b & _b):
+                        if idx in frozen_types_list[pvec_idx][_b]:
+                            freeze_parm = True
+                            break
+                if freeze_parm:
+                    ### Actual idx
+                    _idx = type_i * pvec.parameters_per_force_group + idx
+                    if verbose:
+                        print(
+                            f"Freezing MNGR {pvec_idx} parameter {_idx} {pvec.vector_k[_idx]}")
+                    continue
+                if hist[type_i] == 0:
+                    ### Actual idx
+                    _idx = type_i * pvec.parameters_per_force_group + idx
+                    if verbose:
+                        print(
+                            f"Excluding MNGR {pvec_idx} parameter {_idx} {pvec.vector_k[_idx]}")
+                    continue
                 parm_idx = type_i * pvec.parameters_per_force_group + idx + N_parms
                 name     = pvec.parameter_name_list[idx]
                 if name == 'k':
@@ -422,16 +435,23 @@ def minimize_FF(
         if isinstance(bounds, priors.BaseBounds):
             bounds.apply_pvec(pvec)
             hist = pvec.force_group_histogram
-            offset = 0
             for type_i in range(pvec.force_group_count):
-                if type_i in inserted_type_list[pvec_idx]:
-                    offset += 1
                 for idx in range(pvec.parameters_per_force_group):
                     parm_idx = type_i * pvec.parameters_per_force_group + idx + N_parms
                     name     = pvec.parameter_name_list[idx]
                     bounds_penalty_list.append(bounds_penalty[pvec_idx])
-                    b = bitvec_type_list[pvec_idx][type_i-offset]
-                    if b in frozen_types[pvec_idx]:
+                    b = bitvec_type_list[pvec_idx][type_i]
+                    freeze_parm = False
+                    ### We want to check if b_old and any child-type
+                    ### of b_old must be frozen
+                    for _b in frozen_types_list[pvec_idx]:
+                        ### b is subset of _b
+                        if _b == (b & _b):
+                            ### Note only _b is stored in frozen_types_list,
+                            if idx in frozen_types_list[pvec_idx][_b]:
+                                freeze_parm = True
+                                break
+                    if freeze_parm:
                         continue
                     if hist[type_i] == 0:
                         continue
@@ -583,8 +603,8 @@ def minimize_FF(
             if METHOD == "differential_evolution":
                 result = optimize.differential_evolution(
                    _fun, search_space_list[parm_idx_list].tolist(),
-                   polish = False, x0=x0[parm_idx_list],
-                   maxiter=1000,)
+                   polish = False, x0 = x0[parm_idx_list],
+                   maxiter = 1000,)
             elif METHOD == "basinhopping":
                 result = optimize.basinhopping(
                         _fun, x0[parm_idx_list],
@@ -602,30 +622,13 @@ def minimize_FF(
                 raise NotImplementedError(
                     f"method {METHOD} not implemented.")
 
-            ### Finish it up with a gradient based
-            ### local optimization. We will set the center
-            ### of the regularization to the value found
-            ### by the global optimizer
-            _x0 = x0_ref.copy()
-            _x0[parm_idx_list_all] = result.x
-            likelihood_func.apply_changes(_x0)
-
-            for pvec in pvec_min_list:
-                ### _vector_k_vec is like vector_k
-                ### but without units
-                vector_k      = pvec._vector_k_vec
-                pvec.vector_0 = vector_k
-
-            likelihood_func._initialize_systems()
-            x0 = copy.deepcopy(likelihood_func.pvec[:])[parm_idx_list]
-            x0_ref = copy.deepcopy(likelihood_func.pvec[:])
-
-            _fun  = lambda x: fun(x)  + penalty(x)
-            _grad = lambda x: grad(x) + grad_penalty(x)
-
+            x0 = x0_ref.copy()
+            x0[parm_idx_list] = result.x
+            likelihood_func.apply_changes(x0)
             result = optimize.minimize(
-                _fun, x0, jac = _grad, 
-                method = _OPT_METHOD)
+                    _fun, x0[parm_idx_list], jac = _grad,
+                    method = _OPT_METHOD, 
+                    bounds = search_space_list[parm_idx_list].tolist())
         
         else:
             likelihood_func._initialize_systems()
@@ -640,6 +643,12 @@ def minimize_FF(
         x_best = x0_ref.copy()
         x_best[parm_idx_list] = result.x
         likelihood_func.apply_changes(x_best)
+    
+    #for mngr_idx, pvec in enumerate(pvec_list_cp):
+    #    vec_str = [str(v) for v in pvec.vector_k]
+    #    print(f"MANAGER {mngr_idx}:")
+    #    print(f"==========")
+    #    print(pvec.force_group_histogram, ",".join(vec_str))
     
     parm_idx_list = parm_idx_list_all
     prior_idx_list = prior_idx_list_all
@@ -898,7 +907,7 @@ class BaseOptimizer(object):
 
         self.obs = None
 
-        self.frozen_types = list()
+        self.frozen_types_list = list()
 
 
     def _set_system_list(self, smiles_list):
@@ -976,7 +985,6 @@ class BaseOptimizer(object):
         scale_list = None,
         bounds = None,
         bounds_penalty = 1.,
-        rich_types = False,
         ):
 
         from . import arrays
@@ -1038,71 +1046,61 @@ class BaseOptimizer(object):
         bitvector_typing.BitSmartsManager.bond_ring = []
         bitvector_typing.BitSmartsManager.bond_aromatic = []
 
-        is_bond    = False
-        is_angle   = False
-        is_torsion = False
-
         if isinstance(parameter_manager, parameters.BondManager):
-            is_bond = True
+            bvc = bitvector_typing.BondBitvectorContainer
+            frozen_type_definitions = [
+                ["[*:1]~[*:2]", [None, None]]
+                ]
         elif isinstance(parameter_manager, parameters.AngleManager):
-            is_angle = True
+            bvc = bitvector_typing.AngleBitvectorContainer
+            frozen_type_definitions = [
+                ["[*:1]~[*:2]~[*:3]", [None, None]],
+                ["[*:1]#[*:2]~[*:3]", [None, (180. * _ANGLE_DEG).value_in_unit(_ANGLE)]],
+                ["[*:1]=[*:2]=[*:3]", [None, (180. * _ANGLE_DEG).value_in_unit(_ANGLE)]]
+                ]
         elif isinstance(parameter_manager, (parameters.ProperTorsionManager, parameters.MultiProperTorsionManager)):
-            is_torsion = True
+            bvc = bitvector_typing.ProperTorsionBitvectorContainer
+            frozen_type_definitions = [
+                ["[*:1]~[*:2]~[*:3]~[*:4]", [None] * len(parameter_manager.periodicity_list)],
+                ["[*:1]~[*:2]~[*:3]#[*:4]", [0.] * len(parameter_manager.periodicity_list)],
+                ["[*:1]~[*:2]#[*:3]~[*:4]", [0.] * len(parameter_manager.periodicity_list)],
+                ["[*:1]~[*:2]=[*:3]=[*:4]", [0.] * len(parameter_manager.periodicity_list)],
+                ]
+        else:
+            raise ValueError(
+                f"Parameter manager of type {type(parameter_manager)} not known.")
 
-        if rich_types:
-            sma_list_bonds          = None
-            sma_list_angles         = None
-            sma_list_propertorsions = None
-            self.frozen_types.append(list())
-        else:
-            sma_list_bonds          = ["[*:1]~[*:2]"]
-            sma_list_angles         = ["[*:1]~[*:2]~[*:3]", "[*:1]#[*:2]~[*:3]", "[*:1]=[*:2]=[*:3]"]
-            sma_list_propertorsions = ["[*:1]~[*:2]~[*:3]~[*:4]", "[*:1]~[*:2]~[*:3]#[*:4]", "[*:1]~[*:2]#[*:3]~[*:4]", "[*:1]~[*:2]=[*:3]=[*:4]"]
-        if is_bond:
-            bvc = bitvector_typing.BondBitvectorContainer(sma_list_bonds)
-            self.frozen_types.append(list())
-        elif is_angle:
-            bvc = bitvector_typing.AngleBitvectorContainer(sma_list_angles)
-            self.frozen_types.append(list())
-        elif is_torsion:
-            bvc = bitvector_typing.ProperTorsionBitvectorContainer(sma_list_propertorsions)
-            self.frozen_types.append(list())
-        else:
-            bvc = 0
-        if bvc != 0:
-            _bsm = bitvector_typing.BitSmartsManager(bvc, max_neighbor=3)
+        
+        self.frozen_types_list.append(dict())
+        for parm_idx, frozen_parms in enumerate(frozen_type_definitions):
+            sma, parms = frozen_parms
+            _bsm = bitvector_typing.BitSmartsManager(
+                bvc([sma]), 
+                max_neighbor=3)
             _bsm.generate(ring_safe=True)
             _, _bitvec_list_alloc_dict = _bsm.prepare_bitvectors(max_neighbor=3)
             alloc_dict, smarts_dict, on_dict, subset_dict, bitvec_dict = _bsm.and_rows(
-                max_iter=0, generate_smarts=True, duplicate_removal=True)
-            on_dict_sorted = sorted(on_dict.items(), key= lambda x: x[1])
-            for idx, _ in on_dict_sorted:
-                b = bitvec_dict[idx]
-                self.best_bitvec_type_list[-1].append(b)
-                if self.verbose:
-                    try:
-                        sma = _bsm.bitvector_to_smarts(b)
-                    except:
-                        sma = "???"
-                    print(
-                        f"Adding initial type {sma}")
-
-            if not rich_types:
-                if is_bond:
-                    pass
-                elif is_angle:
-                    pass
-                elif is_torsion:
-                    for b in self.best_bitvec_type_list[-1][1:]:
-                        self.frozen_types[-1].append(b)
-
-            if len(bitvec_dict) > 1:
-                for _ in range(len(bitvec_dict)-1):
-                    pvec.duplicate(0)
-        if not isinstance(pvec, type(None)): 
-            bounds.apply_pvec(pvec)
-            pvec[:] = 0.
-            pvec.apply_changes()
+                max_iter=0, generate_smarts=True, duplicate_removal=False)
+            for key in bitvec_dict:
+                b = bitvec_dict[key]
+                self.frozen_types_list[-1][b] = [idx for idx, p in enumerate(parms) if not isinstance(p, type(None))]
+            ### Only add it once to the best_bitvec_type_list.
+            ### The frozen type list should contain all permutations.
+            self.best_bitvec_type_list[-1].append(b)
+            _bsm.bitvector_to_smarts(b) # This should work
+            if self.verbose:
+                print(
+                    f"Adding initial type {_bsm.bitvector_to_smarts(b)}")
+            if parm_idx > 0:
+                pvec.duplicate(0, -1)
+            N = pvec.parameters_per_force_group
+            vector_0 = pvec.vector_0[:]
+            for i in range(N):
+                if not isinstance(parms[i], type(None)):
+                    vector_0[parm_idx*N+i] = parms[i]            
+            pvec.vector_0 = vector_0
+        pvec[:] = 0.
+        pvec.apply_changes()
 
         bitvector_typing.BitSmartsManager.bond_ring = _bond_ring
         bitvector_typing.BitSmartsManager.bond_aromatic = _bond_aromatic
@@ -1544,7 +1542,10 @@ class BaseOptimizer(object):
             system_idx_list_batch = tuple()
             for _ in range(N_batches):
                 sys_list = tuple()
-                for k in range(N_sys_per_batch):
+                N_iter_max = N_sys_per_batch * 10
+                N_iter     = 0
+                k          = 0
+                while N_iter < N_iter_max:                    
                     if len(label_re[k]) == 0:
                         i = int(np.random.randint(0, self.N_systems))
                     elif len(label_re[k]) == 1:
@@ -1559,8 +1560,11 @@ class BaseOptimizer(object):
                         if np.any(np.isnan(p)):
                             p = None
                         i = int(np.random.choice(label_re[k], p=p))
-                        
                     sys_list += (i,)
+                    N_iter += 1
+                    if k == N_sys_per_batch:
+                        break
+
                 sys_list = list(sys_list)
                 sys_list = tuple(sorted(sys_list))
                 system_idx_list_batch += tuple([sys_list])
@@ -1576,7 +1580,7 @@ class BaseOptimizer(object):
             N_iter     = 0
             while N_iter < N_iter_max:
                 sys_list = np.random.choice(
-                    system_idx_list, size=N_sys_per_batch).tolist()
+                    system_idx_list, size=N_sys_per_batch, replace=False).tolist()
                 sys_list = tuple(sorted(sys_list))
                 if sys_list not in system_idx_list_batch:
                     system_idx_list_batch += tuple([sys_list])
@@ -1669,7 +1673,22 @@ class BaseOptimizer(object):
         for type_i in type_query_list:
             type_j = type_i + 1
             b_old  = bitvec_type_list[type_i]
-            if b_old in self.frozen_types[mngr_idx]:
+            ### We want to check if b_old and any child-type
+            ### of b_old must be frozen
+            freeze_parm = False
+            for _b_old in self.frozen_types_list[mngr_idx]:
+                ### _b_old is subset of b_old
+                if _b_old == (_b_old & b_old):
+                    ### Only `b_old` is stored in self.frozen_types_list
+                    N = len(self.frozen_types_list[mngr_idx][_b_old])
+                    ### Only if all parameters of this type are
+                    ### frozen, we do not proceed here.
+                    if N == pvec.parameters_per_force_group:
+                        freeze_parm = True
+                        break
+                if freeze_parm:
+                    break
+            if freeze_parm:
                 continue
             selection_i = pvec.allocations.index([type_i])[0].tolist()
 
@@ -1926,7 +1945,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 N_types          = pvec.force_group_count
                 if N_types > 1:
                     for type_i in range(N_types):
-                        if bitvec_type_list[type_i] in self.frozen_types[mngr_idx]:
+                        if bitvec_type_list[type_i] in self.frozen_types_list[mngr_idx]:
                             continue
                         type_i = N_types - type_i - 1
                         best_mngr_type_dict[mngr_idx, type_i] = 0
@@ -2145,6 +2164,7 @@ class ForceFieldOptimizer(BaseOptimizer):
     def get_min_scores(
         self,
         mngr_idx_main,
+        bitvec_dict,
         system_idx_list = list(),
         votes_split_list = list(),
         local_targets = False,
@@ -2160,34 +2180,30 @@ class ForceFieldOptimizer(BaseOptimizer):
         system_list = pvec_all[0].parameter_manager.system_list
 
         system_list_id = ray.put(system_list)
-        bitvec_type_list_id = ray.put(bitvec_type_list)
         pvec_cp = pvec_all[mngr_idx_main].vector_k[:].copy()
         allocations_cp = copy.deepcopy(pvec_all[mngr_idx_main].allocations)
-        N_types = pvec_all[mngr_idx_main].force_group_count
 
         worker_id_dict = dict()
         ### Query split candidates
         ### ======================
         for counts, ast in enumerate(votes_split_list):
             allocations, selection, type_ = ast
+            bitvec_type_list_cp = copy.deepcopy(bitvec_type_list)
+            bitvec_type_list_cp[mngr_idx_main].insert(type_[1], bitvec_dict[ast][0])
+            bitvec_type_list_id = ray.put(bitvec_type_list_cp)
 
-            pvec_all[mngr_idx_main].duplicate(type_[0])
-            pvec_all[mngr_idx_main].swap_types(N_types, type_[1])
+            pvec_all[mngr_idx_main].duplicate(type_[0], type_[1])
             pvec_all[mngr_idx_main].allocations[:] = allocations[:]
             pvec_all[mngr_idx_main].apply_changes()
 
             pvec_all_cp = [pvec.copy() for pvec in pvec_all]
             pvec_all_id = ray.put(pvec_all_cp)
 
-            inserted_type_list = [[] for _ in range(self.N_mngr)]
-            inserted_type_list[mngr_idx_main].append(type_[1])
-
             worker_id = minimize_FF.remote(
                     system_list = system_list_id,
                     targetcomputer = self.targetcomputer_id_dict[system_idx_list],
                     pvec_list = pvec_all_id,
-                    frozen_types = self.frozen_types,
-                    inserted_type_list = inserted_type_list,
+                    frozen_types_list = self.frozen_types_list,
                     bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
                     parm_penalty = self.parm_penalty_split,
@@ -2436,7 +2452,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                         print(
                             "Optimize parameters.")
                     minimize_initial_worker_id_dict = dict()
-                    inserted_type_list = [[] for _ in range(self.N_mngr)]
                     for sys_idx_pair in self.system_idx_list_batch:
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
@@ -2450,8 +2465,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                             targetcomputer = self.targetcomputer_id_dict[sys_idx_pair],
                             pvec_list = pvec_list,
                             bitvec_type_list = bitvec_type_list,
-                            frozen_types = self.frozen_types,
-                            inserted_type_list = inserted_type_list,
+                            frozen_types_list = self.frozen_types_list,
                             bounds_list = self.bounds_list,
                             ### This is the only place where we don't want to 
                             ### do local targets
@@ -2504,15 +2518,16 @@ class ForceFieldOptimizer(BaseOptimizer):
                             abs_grad_score = False,
                             norm_cutoff = 1.e-2,
                             keep_N_best = keep_N_best)
-                        self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
-                            mngr_idx_main=mngr_idx,
-                            system_idx_list=sys_idx_pair,
-                            votes_split_list=votes_split_list,
-                            local_targets=False)
                         self.bitvec_dict[mngr_idx,sys_idx_pair] = dict()
                         for ast in votes_split_list:
                             b_list = split_worker_id_dict[mngr_idx,sys_idx_pair][1][ast]
                             self.bitvec_dict[mngr_idx,sys_idx_pair][ast] = b_list
+                        self.minscore_worker_id_dict[mngr_idx,sys_idx_pair] = self.get_min_scores(
+                            mngr_idx_main=mngr_idx,
+                            bitvec_dict = self.bitvec_dict[mngr_idx,sys_idx_pair],
+                            system_idx_list=sys_idx_pair,
+                            votes_split_list=votes_split_list,
+                            local_targets=False)
                         if self.verbose:
                             print(
                                 f"For mngr {mngr_idx} and systems {sys_idx_pair}:\n"
@@ -2575,7 +2590,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
                         pvec_all_id = ray.put(pvec_list)
-                        bitvec_type_list_id = ray.put(bitvec_type_list)
                         _system_list = list()
                         for sys_idx in sys_idx_pair:
                             sys = self.system_list[sys_idx]
@@ -2586,14 +2600,15 @@ class ForceFieldOptimizer(BaseOptimizer):
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                         for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
                             _, _, type_ = ast
-                            inserted_type_list = [list() for _ in range(self.N_mngr)]
-                            inserted_type_list[mngr_idx].append(type_[1])
+                            bitvec_type_list_cp = copy.deepcopy(bitvec_type_list)
+                            bitvec_type_list_cp.insert(type_[1], self.bitvec_dict[mngr_idx,sys_idx_pair][ast][0])
+                            bitvec_type_list_id = ray.put(bitvec_type_list_cp)
+
                             worker_id = minimize_FF.remote(
                                     system_list = system_list_id,
                                     targetcomputer = self.targetcomputer_id_dict[sys_idx_pair],
                                     pvec_list = pvec_all_id,
-                                    frozen_types = self.frozen_types,
-                                    inserted_type_list = inserted_type_list,
+                                    frozen_types_list = self.frozen_types_list,
                                     bitvec_type_list = bitvec_type_list_id,
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,

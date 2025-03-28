@@ -23,6 +23,7 @@ from .system import System, SystemManager
 # ==============================================================================
 from .constants import (_LENGTH,
                         _ANGLE,
+                        _ANGLE_DEG,
                         _ATOMIC_MASS,
                         _ENERGY_PER_MOL,
                         _WAVENUMBER,
@@ -318,10 +319,10 @@ class AngleContainer(ForceTypeContainer):
         self,
         value: _UNIT_QUANTITY):
         
-        if value < 0. * _ANGLE:
+        if value < 0. * _ANGLE_DEG:
             value = 0. * unit.degree
-        elif value > 180. * unit.degree:
-            value = 180. * unit.degree
+        elif value > 180. * _ANGLE_DEG:
+            value = 180. * _ANGLE_DEG
 
         self._angle = value.in_unit_system(unit.md_unit_system)
 
@@ -1650,15 +1651,15 @@ class AngleManager(ParameterManager):
         self.name      = "AngleManager"
 
         self.default_parms = {
-            "k"     : 0. * _FORCE_CONSTANT_ANGLE,
-            "angle" : 0. * _ANGLE
+            "k"     :   0. * _FORCE_CONSTANT_ANGLE,
+            "angle" : 180. * _ANGLE_DEG
         }
 
         ### The inactive force
         self.inactive_forcecontainer = self.forcecontainer(
             {
-                "k"     : 0. * _FORCE_CONSTANT_ANGLE,
-                "angle" : 0. * _ANGLE
+                "k"     :   0. * _FORCE_CONSTANT_ANGLE,
+                "angle" : 180. * _ANGLE_DEG
             },
             exclude_list,
             )
@@ -1700,13 +1701,13 @@ class AngleManager(ParameterManager):
                     atm_idxs[0],
                     atm_idxs[1],
                     atm_idxs[2],
-                    90. * _ANGLE,
-                    0. * _FORCE_CONSTANT_ANGLE)
+                    180. * _ANGLE_DEG,
+                    0.   * _FORCE_CONSTANT_ANGLE)
                 forcecontainer_list.append(
                     self.forcecontainer(
                         {
-                            'angle' : 90. * _ANGLE,
-                            'k'     : 0. * _FORCE_CONSTANT_ANGLE,
+                            'angle' : 180. * _ANGLE_DEG,
+                            'k'     : 0.   * _FORCE_CONSTANT_ANGLE,
                         },
                         self.exclude_list,
                         )

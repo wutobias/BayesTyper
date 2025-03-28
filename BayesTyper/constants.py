@@ -54,7 +54,7 @@ _EPSILON_GS      = 1.e-2 # finitite difference for gradient score
 #note that after openmm 8.1.0 this has units unit.kilojoules_per_mole/unit.nanometer
 _MIN_TOLERACE      = 1.e-4 * unit.kilojoules_per_mole
 _USE_GLOBAL_OPT    = True # Use of a global optimizer
-_OPT_METHOD        = "BFGS"
+_OPT_METHOD        = "L-BFGS-B"
 _GLOBAL_TOP_METHOD = "differential_evolution"
 ### Fraction of bits to be on for a bitvector
 ### to be considered during type splitting
