@@ -13,7 +13,7 @@ _FORCE_TAGS     = ['Constraints',
                    'ToolkitAM1BCC',
                    'ChargeIncrementModel']
 
-_DEFAULT_FF = "openff_unconstrained-1.3.0.offxml"
+_DEFAULT_FF = "openff_unconstrained-2.2.1.offxml"
 
 ### Some standard units that control the output
 ### of every routine.

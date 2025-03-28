@@ -2086,9 +2086,9 @@ class MultiProperTorsionManager(ParameterManager):
         system: System) -> list:
 
         exclusion_patterns = [
-            "[*:1]-[*:2]#[*:3]-[*:4]",
-            "[*:1]-[*:2]-[*:3]#[*:4]",
-            "[*:1]~[*:2]=[#6,#7,#16,#15;X2:3]=[*:4]",
+            #"[*:1]-[*:2]#[*:3]-[*:4]",
+            #"[*:1]-[*:2]-[*:3]#[*:4]",
+            #"[*:1]~[*:2]=[#6,#7,#16,#15;X2:3]=[*:4]",
         ]
 
         exclusion_matches = tuple()

@@ -948,8 +948,6 @@ class BaseOptimizer(object):
                         system_manager._system_list[sys_idx])
                 self.system_name_list.append(smi)
             else:
-                self.system_list.append(None)
-                self.system_name_list.append(smi)
                 warnings.warn(
                         f"Could not load system {smi}")
 
@@ -992,6 +990,7 @@ class BaseOptimizer(object):
         from . import bitvector_typing
         from .tools import remove_types
         import numpy as np
+        from .system import System
 
         if parameter_manager.N_systems != 0:
             raise ValueError(
@@ -1001,8 +1000,7 @@ class BaseOptimizer(object):
             parameter_manager)
         ### 100 attempts to build initial type
         found_system = False
-        for _ in range(100):
-            smi = np.random.choice(self.smiles_list)
+        for smi in self.smiles_list:
             self._set_system_list([smi])
             if len(self.system_list) > 0:
                 found_system = True
@@ -1524,7 +1522,7 @@ class BaseOptimizer(object):
         import copy
         import numpy as np
 
-        if (int(N_sys_per_batch) >= int(self.N_all_systems)) or (int(self.N_all_systems) == 1):
+        if (int(N_sys_per_batch) >= int(self.N_systems)) or (int(self.N_all_systems) == 1):
             N_batches = 1
             N_sys_per_batch = self.N_all_systems
             cluster_systems = False
@@ -1567,9 +1565,10 @@ class BaseOptimizer(object):
                     if k == N_sys_per_batch:
                         break
 
-                sys_list = list(sys_list)
-                sys_list = tuple(sorted(sys_list))
-                system_idx_list_batch += tuple([sys_list])
+                if len(sys_list) > 0:
+                    sys_list = list(sys_list)
+                    sys_list = tuple(sorted(sys_list))
+                    system_idx_list_batch += tuple([sys_list])
         else:
             import numpy as np
             system_idx_list = np.arange(
@@ -1584,7 +1583,7 @@ class BaseOptimizer(object):
                 sys_list = np.random.choice(
                     system_idx_list, size=N_sys_per_batch, replace=False).tolist()
                 sys_list = tuple(sorted(sys_list))
-                if sys_list not in system_idx_list_batch:
+                if (sys_list not in system_idx_list_batch) and len(sys_list) > 0:
                     system_idx_list_batch += tuple([sys_list])
                 if len(system_idx_list_batch) == N_batches:
                     break
