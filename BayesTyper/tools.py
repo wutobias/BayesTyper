@@ -1021,6 +1021,29 @@ def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manage
             f"Could not build system {_smiles}")
         return None
 
+def fix_qcentry(qcentry, geometry):
+
+    """
+    Fix some issues with qcschemas.
+    """
+
+    from openmm import unit
+
+    ### We don't need fixing, if these two are found
+    if 'symbols' in qcentry and 'geometry' in qcentry:
+        return qcentry
+    
+    if 'molecule' not in qcentry:
+        qcentry['molecule'] = dict()
+    if 'geometry' not in qcentry['molecule']:
+        if unit.is_quantity(geometry):
+            geometry = geometry.value_in_unit(unit.bohr)
+        qcentry['molecule']['geometry'] = geometry
+    if 'attributes' not in qcentry['molecule']:
+        qcentry['molecule']['attributes'] = qcentry['attributes']
+
+    return qcentry
+
 
 @ray.remote
 def generate_rdmol_dict(smiles_list, optdataset_dict):
@@ -1033,7 +1056,9 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
     for smiles in smiles_list:
         found_valid_qcentry = False
         if "qcentry" in optdataset_dict[smiles]:
-            qcentry = optdataset_dict[smiles]["qcentry"]
+            qcentry = fix_entry(
+                    optdataset_dict[smiles]["qcentry"],
+                    optdataset_dict[smiles]['final_geo'])
             try:
                 offmol = Molecule.from_qcschema(
                     qcentry, allow_undefined_stereo=True)
@@ -1043,7 +1068,9 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
         else:
             for key in optdataset_dict[smiles]:
                 if "qcentry" in optdataset_dict[smiles][key]:
-                    qcentry = optdataset_dict[smiles][key]["qcentry"]
+                    qcentry = fix_qcentry(
+                            optdataset_dict[smiles][key]["qcentry"],
+                            optdataset_dict[smiles][key]["final_geo"])
                     try:
                         offmol = Molecule.from_qcschema(
                             qcentry, allow_undefined_stereo=True)
@@ -1397,24 +1424,33 @@ def generate_systemmanager(
                 partial_charges = None
                 if 'partial_charges' in optdataset_dict[smiles][key]:
                     partial_charges = optdataset_dict[smiles][key]['partial_charges']
+                qcentry = fix_qcentry(
+                        optdataset_dict[smiles][key]["qcentry"],
+                        optdataset_dict[smiles][key]["final_geo"])
                 worker_id = parameterize_system.remote(
-                    optdataset_dict[smiles][key]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
+                        qcentry, smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
         elif use_torsion:
-            key0 = list(
-                torsiondataset_dict[smiles].keys()
-            )[0]
-            key1 = list(
-                torsiondataset_dict[smiles][key0].keys()
-            )[0]
+            for key0 in torsiondataset_dict[smiles]:
+                check = False
+                for key1 in torsiondataset_dict[smiles][key0]:
+                    check  = "qcentry" in torsiondataset_dict[smiles][key0][key1]
+                    check *= "final_geo" in torsiondataset_dict[smiles][key0][key1]
+                    if check:
+                        break
+                if check:
+                    break
             if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
                 partial_charges = None
                 if 'partial_charges' in optdataset_dict[smiles][key]:
                     partial_charges = optdataset_dict[smiles][key]['partial_charges']
+                qcentry = fix_qcentry(
+                        torsiondataset_dict[smiles][key0][key1]["qcentry"],
+                        torsiondataset_dict[smiles][key0][key1]["final_geo"])
                 worker_id = parameterize_system.remote(
-                    torsiondataset_dict[smiles][key0][key1]["qcentry"], smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
+                    qcentry, smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue

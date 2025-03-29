@@ -1622,7 +1622,8 @@ class BaseOptimizer(object):
                 if sys_idx in sys_map_dict:
                     sys_list.append(sys_map_dict[sys_idx])
             sys_list = tuple(sorted(sys_list))
-            system_idx_list_batch_new += tuple([sys_list])
+            if len(sys_list) > 0:
+                system_idx_list_batch_new += tuple([sys_list])
 
         return system_idx_list_batch_new
 
