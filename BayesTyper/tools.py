@@ -1028,6 +1028,10 @@ def fix_qcentry(qcentry, geometry):
     """
 
     from openmm import unit
+    import qcelemental as qce
+
+    if isinstance(qcentry, qce.models.molecule.Molecule):
+        return qcentry
 
     ### We don't need fixing, if these two are found
     if 'symbols' in qcentry and 'geometry' in qcentry:
