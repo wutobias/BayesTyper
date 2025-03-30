@@ -1529,7 +1529,10 @@ class BaseOptimizer(object):
 
         if cluster_systems:
             centroid, label = cluster.vq.kmeans2(
-                    self.obs, N_sys_per_batch, minit='random', iter=500)
+                    self.obs, 
+                    N_sys_per_batch, 
+                    minit='points', # setting to random may lead to matrix decomposition error
+                    iter=1000)
             label_re = [list() for _ in range(N_sys_per_batch)]
             dists    = [list() for _ in range(N_sys_per_batch)]
             for i in range(self.N_all_systems):
