@@ -844,12 +844,14 @@ class ForceFieldParameterVector(ParameterVectorLinearTransformation):
         if isinstance(allocations, type(None)):
             allocations = parameters.allocations
 
-        assert (parameters.size-1) >= max(allocations)
+        if len(allocations[:]) > 0:
+            assert (parameters.size-1) >= max(allocations)
         assert allocations.size == self.allocations.size
 
         ### This should work for both numpy and BaseVector
         ### arrays.
-        self.allocations[:] = copy.deepcopy(allocations[:])
+        if len(allocations[:]) > 0:
+            self.allocations[:] = copy.deepcopy(allocations[:])
 
         ### We do a "try ... except ..." part here, since
         ### a parameter vector might have no parameter_manager.

@@ -1235,11 +1235,13 @@ class SystemManagerLoader(object):
         return _smiles_list
 
 
-    def _generate_rdmol_dict(self):
+    def _generate_rdmol_dict(self, exclude_small=True):
 
         import ray
         from openff.toolkit.topology import Molecule
         from rdkit import Chem
+        if exclude_small:
+            from rdkit.Chem import rdMolDescriptors
 
         CHUNK_SIZE = 1000
         optdataset_dict = dict()
@@ -1284,6 +1286,10 @@ class SystemManagerLoader(object):
                 ### smiles : initial smiles
                 ### smi    : canonical and not isomeric smiles
                 rdmol, smi = _rdmol_dict[smiles]
+                if exclude_small:
+                    heavy_atom_count = rdMolDescriptors.CalcNumHeavyAtoms(rdmol)
+                    if heavy_atom_count < 2:
+                        continue
                 self.rdmol_dict[smi] = rdmol
                 if smi in self.rdmol_to_smiles_map_dict:
                     self.rdmol_to_smiles_map_dict[smi].append(smiles)

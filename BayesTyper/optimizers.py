@@ -342,13 +342,13 @@ def minimize_FF(
     bitvec_type_list,
     bounds_list,
     parm_penalty,
-    grad_diff=_EPSILON,
-    local_targets=False,
-    N_sys_per_likelihood_batch=4,
-    bounds_penalty=10.,
-    use_global_opt=_USE_GLOBAL_OPT,
-    verbose=False,
-    get_timing=False):
+    grad_diff = _EPSILON,
+    local_targets = False,
+    N_sys_per_likelihood_batch = 4,
+    bounds_penalty = 10.,
+    use_global_opt = _USE_GLOBAL_OPT,
+    verbose = False,
+    get_timing = False):
 
     verbose = False
 
@@ -402,16 +402,16 @@ def minimize_FF(
                             freeze_parm = True
                             break
                 if freeze_parm:
-                    ### Actual idx
-                    _idx = type_i * pvec.parameters_per_force_group + idx
                     if verbose:
+                        ### Actual idx
+                        _idx = type_i * pvec.parameters_per_force_group + idx
                         print(
                             f"Freezing MNGR {pvec_idx} parameter {_idx} {pvec.vector_k[_idx]}")
                     continue
                 if hist[type_i] == 0:
-                    ### Actual idx
-                    _idx = type_i * pvec.parameters_per_force_group + idx
                     if verbose:
+                        ### Actual idx
+                        _idx = type_i * pvec.parameters_per_force_group + idx
                         print(
                             f"Excluding MNGR {pvec_idx} parameter {_idx} {pvec.vector_k[_idx]}")
                     continue
@@ -1037,6 +1037,13 @@ class BaseOptimizer(object):
 
         pvec_list, _ = self.generate_parameter_vectors()
         pvec = pvec_list[-1]
+        if pvec.force_group_count == 0:
+            value_list = list()
+            for key in pvec.parameter_manager.default_parms:
+                if key in pvec.parameter_name_list:
+                    value_list.append(
+                        pvec.parameter_manager.default_parms[key])
+            pvec.add_force_group(value_list)
 
         import copy
         _bond_ring = copy.deepcopy(
@@ -1098,7 +1105,8 @@ class BaseOptimizer(object):
             for i in range(N):
                 if not isinstance(parms[i], type(None)):
                     vector_0[parm_idx*N+i] = parms[i]            
-            pvec.vector_0 = vector_0
+            if len(vector_0[:]) > 0:
+                pvec.vector_0 = vector_0
         pvec[:] = 0.
         pvec.apply_changes()
 
@@ -2465,13 +2473,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                     for sys_idx_pair in self.system_idx_list_batch:
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
-                        _system_list = list()
-                        for sys_idx in sys_idx_pair:
-                            sys = self.system_list[sys_idx]
-                            if isinstance(sys, System):
-                                _system_list.append(sys)
+                        system_list = pvec_list[0].parameter_manager.system_list
                         worker_id = minimize_FF.remote(
-                            system_list = _system_list,
+                            system_list = system_list,
                             targetcomputer = self.targetcomputer_id_dict[sys_idx_pair],
                             pvec_list = pvec_list,
                             bitvec_type_list = bitvec_type_list,
