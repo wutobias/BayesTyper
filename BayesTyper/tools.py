@@ -1015,19 +1015,14 @@ def parameterize_system(_qcentry, _geometry, _smiles, _forcefield_name, remove_t
         value_dict = json.loads(_qcentry)
         _qcentry   = qce.models.molecule.Molecule.from_data(value_dict)
     _qcentry = fix_qcentry(_qcentry, _geometry)
-    try:
-        system_list = [system.from_qcschema(
-            _qcentry, _smiles, _forcefield_name, _partial_charges)]
-        if remove_types_manager_list:
-            remove_types(
-                system_list,
-                remove_types_manager_list)
-        return system_list[0]
-    except Exception as e:
-        print(e)
-        print(
-            f"Could not build system {_smiles}")
-        return None
+
+    system_list = [system.from_qcschema(
+        _qcentry, _smiles, _forcefield_name, _partial_charges)]
+    if remove_types_manager_list:
+        remove_types(
+            system_list,
+            remove_types_manager_list)
+    return system_list[0]
 
 def fix_qcentry(qcentry, geometry):
 
@@ -1305,7 +1300,7 @@ class SystemManagerLoader(object):
 
         _smiles_list = list()
         for smi in smiles_list:
-            if not smi in self.system_cache_dict:
+            if smi not in self.system_cache_dict:
                 _smiles_list.append(smi)
         _smiles_query_list = self._check_smiles_list(_smiles_list)
 
@@ -1335,11 +1330,11 @@ class SystemManagerLoader(object):
 
         for smi in smiles_list:
             if smi in system_manager._rdmol_list:
+                sys_idx = system_manager._rdmol_list.index(smi)
+                sys     = system_manager._system_list[sys_idx]
                 if self.verbose:
                     print(
                         f"Adding {smi}")
-                sys_idx = system_manager._rdmol_list.index(smi)
-                sys     = system_manager._system_list[sys_idx]
                 self.system_cache_dict[smi] = copy.deepcopy(sys)
             elif smi in self.system_cache_dict:
                 if self.verbose:
@@ -1556,15 +1551,21 @@ def generate_systemmanager(
         [worker_id], worker_id_list = ray.wait(worker_id_list)
         smiles = worker_id_dict[worker_id]
 
-        if verbose:
-            print("Adding", smiles)
-
         try:
             sys = ray.get(worker_id)
         except Exception as e:
-            print(e)
-            continue
-        if isinstance(sys, type(None)):
+            sys = None
+            #print(e)
+
+        if verbose:
+            if isinstance(sys, system.System):
+                print(
+                    f"Adding {smiles} to systemmanager.")
+            else:
+                print(
+                    f"Discarding {smiles} from systemmanager.")
+
+        if not isinstance(sys, system.System):
             continue
 
         smi = Chem.MolToSmiles(
@@ -1714,7 +1715,7 @@ def generate_systemmanager(
                     else:
                         sys.add_target(ForceMatchingTarget, target_dict_frc)
                     N_data_points += len(target_dict_frc["structures"])
-        
+
     return systemmanager, N_data_points
 
 

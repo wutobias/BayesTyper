@@ -917,6 +917,7 @@ class BaseOptimizer(object):
     def _set_system_list(self, smiles_list):
 
         import warnings
+        from .system import System
 
         if len(self.system_manager_loader.smiles_list) == 0:
             self.system_manager_loader._generate_rdmol_dict()
@@ -950,9 +951,13 @@ class BaseOptimizer(object):
         for smi in smiles_list:
             if smi in system_manager._rdmol_list:
                 sys_idx = system_manager._rdmol_list.index(smi)
-                self.system_list.append(
+                if isinstance(system_manager._system_list[sys_idx], System):
+                    self.system_list.append(
                         system_manager._system_list[sys_idx])
-                self.system_name_list.append(smi)
+                    self.system_name_list.append(smi)
+                else:
+                    warnings.warn(
+                            f"Could not load system {smi}")
             else:
                 warnings.warn(
                         f"Could not load system {smi}")
@@ -964,14 +969,8 @@ class BaseOptimizer(object):
         from .system import System
 
         for sys_idx_pair in system_idx_list:
-            system_list = list()
-            for sys_idx in sys_idx_pair:
-                if not isinstance(self.system_list[sys_idx], System):
-                    continue
-                system_list.append(
-                    self.system_list[sys_idx])
             targetcomputer = TargetComputer.remote(
-                system_list,
+                [self.system_list[sys_idx] for sys_idx in sys_idx_pair],
                 target_type_list=None,
                 error_factor=error_factor)
             self.targetcomputer_id_dict[sys_idx_pair] = targetcomputer
@@ -1269,13 +1268,11 @@ class BaseOptimizer(object):
             sys_dict = dict()
             if isinstance(sys_idx, int):
                 sys = self.system_list[sys_idx]
-                if isinstance(sys, System):
-                    sys_dict[sys.name, sys_idx] = sys.openmm_system
+                sys_dict[sys.name, sys_idx] = sys.openmm_system
             else:
                 for _sys_idx in sys_idx:
                     sys = self.system_list[_sys_idx]
-                    if isinstance(sys, System):
-                        sys_dict[sys.name, _sys_idx] = sys.openmm_system
+                    sys_dict[sys.name, _sys_idx] = sys.openmm_system
             targetcomputer = self.targetcomputer_id_dict[sys_idx]
             worker_id = ray.get(
                 targetcomputer.__call__.remote(sys_dict, False))
@@ -1340,7 +1337,7 @@ class BaseOptimizer(object):
         else:
             _mngr_idx_list = mngr_idx_list
 
-        for mngr_idx in mngr_idx_list:
+        for mngr_idx in _mngr_idx_list:
             to_delete = list()
             for key in self.parm_mngr_cache_dict:
                 _mngr_idx, _ = key
@@ -1386,14 +1383,13 @@ class BaseOptimizer(object):
             parm_mngr = self.parm_mngr_cache_dict[key]
         else:
             worker_id_list = list()
-            parm_mngr = copy.deepcopy(self.parameter_manager_list[mngr_idx])
+            parm_mngr = copy.deepcopy(
+                self.parameter_manager_list[mngr_idx])
             parm_mngr_id = ray.put(parm_mngr)
             s_list   = tuple()
             idx_list = tuple()
             for sys_idx in _system_idx_list:
                 sys = self.system_list[sys_idx]
-                if not isinstance(sys, System):
-                    continue
                 s_list   += (sys,)
                 idx_list += (sys_idx,)
                 if len(s_list) == _CHUNK_SIZE:
@@ -1412,8 +1408,6 @@ class BaseOptimizer(object):
                 parm_mngr.add_parameter_manager(_parm_mngr)
                 for sys_idx in idx_list:
                     sys = self.system_list[sys_idx]
-                    if not isinstance(sys, System):
-                        continue
                     parm_mngr.system_list[sys_counts] = sys
                     sys_counts += 1
             self.parm_mngr_cache_dict[key] = parm_mngr
@@ -2274,7 +2268,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### Number of batches to use per loop
         N_batches = 1,
         ### Optimize ordering in which systems are computed
-        optimize_system_ordering = False,
+        optimize_system_ordering = True,
         ### Keep the `keep_N_best` solutions for each split
         keep_N_best = 10,
         ### Do a maximum of `N_max_splits` splits per parameter
@@ -2320,7 +2314,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         for _ in range(100):
             smi = np.random.choice(self.smiles_list)
             self._set_system_list([smi])
-            if len(self.system_list) > 0 and isinstance(self.system_list[-1], System):
+            if len(self.system_list) > 0:
                 found_system = True
                 break
         if not found_system:
@@ -2333,8 +2327,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 pvec_list[mngr_idx],
                 bitvec_type_list[mngr_idx]
                 )
-
-        self.save_traj(parm_penalty=1.)
+        self.save_traj(parm_penalty=1.)        
 
         ### This enables deterministic paramter type moves that
         ### preserve the number of parameter types. We set this to
@@ -2384,6 +2377,8 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         if self.verbose and restart:
             print("Attempting to restart from previous run.")
+
+        self.clear_cache()
 
         for iteration_idx in range(iterations):
 
@@ -2604,12 +2599,8 @@ class ForceFieldOptimizer(BaseOptimizer):
                         pvec_list, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
                         pvec_all_id = ray.put(pvec_list)
-                        _system_list = list()
-                        for sys_idx in sys_idx_pair:
-                            sys = self.system_list[sys_idx]
-                            if isinstance(sys, System):
-                                _system_list.append(sys)
-                        system_list_id = ray.put(_system_list)
+                        system_list_id = ray.put(
+                            self.system_list[sys_idx])
 
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                         for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
