@@ -1558,7 +1558,10 @@ class BaseOptimizer(object):
                         p = np.array(dists[k])
                         _min = p.min()
                         _max = p.max()
-                        p = (p - _min) / (_max - _min)
+                        diff = _max - _min
+                        if diff < 1.e-7:
+                            diff = 1.
+                        p = (p - _min) / diff
                         p = 1. - p
                         p = p/np.sum(p)
                         if np.any(np.isnan(p)):
