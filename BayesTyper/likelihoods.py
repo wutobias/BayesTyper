@@ -223,7 +223,8 @@ class LikelihoodVectorized(object):
         system_dict = self.apply_changes(
             vec, grad=False, 
             parm_idx_list=parm_idx_list) 
-        logP_likelihood, _ = self.targetcomputer(system_dict, False, True)
+        logP_likelihood, _ = ray.get(
+            self.targetcomputer.__call__.remote(system_dict, False, True))
 
         return logP_likelihood
 
@@ -247,11 +248,13 @@ class LikelihoodVectorized(object):
         for key in system_dict:
             system_batch_dict[key] = system_dict[key]
             if len(system_batch_dict) == self._N_sys_per_batch:
-                worker_id = self.targetcomputer(system_batch_dict, False, False)
+                worker_id = ray.get(
+                    self.targetcomputer.__call__.remote(system_batch_dict, False, False))
                 worker_id_dict[worker_id] = list(system_batch_dict.keys())
                 system_batch_dict = dict()
         if len(system_batch_dict) > 0:
-            worker_id = self.targetcomputer(system_batch_dict, False, False)
+            worker_id = ray.get(
+                self.targetcomputer.__call__.remote(system_batch_dict, False, False))
             worker_id_dict[worker_id] = list(system_batch_dict.keys())
             system_batch_dict = dict()
 
@@ -279,8 +282,9 @@ class LikelihoodVectorized(object):
                     ray.cancel(worker_id, force=True)
                     key_list = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
-                    worker_id = self.targetcomputer(
-                        {key:system_dict[key] for key in key_list}, False, False)
+                    worker_id = ray.get(
+                        self.targetcomputer.__call__.remote(
+                            {key:system_dict[key] for key in key_list}, False, False))
                     worker_id_dict[worker_id] = key_list
                 worker_id_list = list(worker_id_dict.keys())
 
@@ -304,7 +308,8 @@ class LikelihoodVectorized(object):
             vec, grad=True, 
             parm_idx_list=parm_idx_list, 
             grad_diff=grad_diff)
-        _, results_dict = self.targetcomputer(system_dict, False, True)
+        _, results_dict = ray.get(
+            self.targetcomputer.__call__.remote(system_dict, False, True))
 
         grad = np.zeros(self.N_parms, dtype=float)
         for key in results_dict:
@@ -355,11 +360,13 @@ class LikelihoodVectorized(object):
             #sys_name, sign, parm_idx = key
             system_batch_dict[key] = system_dict[key]
             if len(system_batch_dict) == self._N_sys_per_batch:
-                worker_id = self.targetcomputer(system_batch_dict, False, False)
+                worker_id = ray.get(
+                    self.targetcomputer.__call__.remote(system_batch_dict, False, False))
                 worker_id_dict[worker_id] = list(system_batch_dict.keys())
                 system_batch_dict = dict()
         if len(system_batch_dict) > 0:
-            worker_id = self.targetcomputer(system_batch_dict, False, False)
+            worker_id = ray.get(
+                self.targetcomputer.__call__.remote(system_batch_dict, False, False))
             worker_id_dict[worker_id] = list(system_batch_dict.keys())
             system_batch_dict = dict()
 
@@ -396,8 +403,9 @@ class LikelihoodVectorized(object):
                     ray.cancel(worker_id, force=True)
                     key_list = worker_id_dict[worker_id]
                     del worker_id_dict[worker_id]
-                    worker_id = self.targetcomputer(
-                        {key:system_dict[key] for key in key_list}, False, False)
+                    worker_id = ray.get(
+                        self.targetcomputer.__call__.remote(
+                            {key:system_dict[key] for key in key_list}, False, False))
                     worker_id_dict[worker_id] = key_list
                 worker_id_list = list(worker_id_dict.keys())
 

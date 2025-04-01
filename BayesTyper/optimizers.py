@@ -29,6 +29,8 @@ from .ray_tools import retrieve_failed_workers
 
 import ray
 
+import gc
+
 
 @ray.remote
 def generate_parameter_manager(sys_list, parm_mngr):
@@ -909,6 +911,8 @@ class BaseOptimizer(object):
 
         self.frozen_types_list = list()
 
+        self._ray_cleanup = list()
+
 
     def _set_system_list(self, smiles_list):
 
@@ -937,8 +941,10 @@ class BaseOptimizer(object):
         self.clear_cache()
         del self.system_list[:]
         del self.system_name_list[:]
+        for sys_idx in self.targetcomputer_id_dict:
+            self._ray_cleanup.append(
+                self.targetcomputer_id_dict[sys_idx])
         self.targetcomputer_id_dict.clear()
-
         system_manager = self.system_manager_loader.generate_systemmanager(_smiles_list)
 
         for smi in smiles_list:
@@ -964,15 +970,11 @@ class BaseOptimizer(object):
                     continue
                 system_list.append(
                     self.system_list[sys_idx])
-            targetcomputer = TargetComputer(
+            targetcomputer = TargetComputer.remote(
                 system_list,
                 target_type_list=None,
                 error_factor=error_factor)
-            self.targetcomputer_id_dict[sys_idx_pair] = ray.put(
-                targetcomputer)
-            #print(
-            #        "target_dict:", targetcomputer.target_dict.keys(),
-            #        "system_list:", [self.system_list[sys_idx].name for sys_idx in sys_idx_pair])
+            self.targetcomputer_id_dict[sys_idx_pair] = targetcomputer
 
 
     def add_parameters(
@@ -1266,8 +1268,9 @@ class BaseOptimizer(object):
                     sys = self.system_list[_sys_idx]
                     if isinstance(sys, System):
                         sys_dict[sys.name, _sys_idx] = sys.openmm_system
-            targetcomputer = ray.get(self.targetcomputer_id_dict[sys_idx])
-            worker_id = targetcomputer(sys_dict, False)
+            targetcomputer = self.targetcomputer_id_dict[sys_idx]
+            worker_id = ray.get(
+                targetcomputer.__call__.remote(sys_dict, False))
             worker_id_dict[worker_id] = sys_idx
 
         if as_dict:
@@ -1568,9 +1571,9 @@ class BaseOptimizer(object):
                     if k == N_sys_per_batch:
                         break
 
-                if len(sys_list) > 0:
-                    sys_list = list(sys_list)
-                    sys_list = tuple(sorted(sys_list))
+                sys_list = list(sys_list)
+                sys_list = tuple(sorted(sys_list))
+                if (sys_list not in system_idx_list_batch) and len(sys_list) > 0:
                     system_idx_list_batch += tuple([sys_list])
         else:
             import numpy as np
@@ -1840,7 +1843,6 @@ class ForceFieldOptimizer(BaseOptimizer):
         state["parm_mngr_cache_dict"] = dict()
         state["bsm_cache_dict"] = dict()
 
-        import gc
         gc.collect()
         
         return state
@@ -2312,7 +2314,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                 break
         if not found_system:
             raise ValueError(
-                f"Could not build initial system with parameter manager {self._N_mngr}")
+                f"Could not build initial system")
         pvec_list, bitvec_type_list = self.generate_parameter_vectors()
         for mngr_idx in range(self.N_mngr):
             self.update_best(
@@ -3003,6 +3005,14 @@ class ForceFieldOptimizer(BaseOptimizer):
 
                 self.clear_cache()
                 self.system_manager_loader.clear_cache()
+
+                for worker_id in self._ray_cleanup:
+                    try:
+                        ray.kill(worker_id)
+                    except:
+                        continue
+                del self._ray_cleanup[:]
+                gc.collect()
             
             ### Remove tempory data
             if restart:
@@ -3017,6 +3027,14 @@ class ForceFieldOptimizer(BaseOptimizer):
             # self.split_iteration_idx must be reset here
             self.split_iteration_idx = 0
             self.accepted_counter = 0
+            for worker_id in self._ray_cleanup:
+                try:
+                    ray.kill(worker_id)
+                except:
+                    continue
+            del self._ray_cleanup[:]
+            gc.collect()
+
 
             ### ================== ###
             ### GARBAGE COLLECTION ###
@@ -3044,5 +3062,13 @@ class ForceFieldOptimizer(BaseOptimizer):
                     self,
                     fopen
                 )
+
+            for worker_id in self._ray_cleanup:
+                try:
+                    ray.kill(worker_id)
+                except:
+                    continue
+            del self._ray_cleanup[:]
+            gc.collect()
         ### END LOOP OVER ITERATIONS
 

@@ -60,20 +60,22 @@ def benchmark_systems(
     from BayesTyper import engines
     import ray
 
-    tc = targets.TargetComputer(system_list)
+    targetcomputer = targets.TargetComputer.remote(system_list)
     openmm_system_dict = dict()
     for i, sys in enumerate(system_list):
         openmm_system_dict[sys.name,0] = sys.openmm_system
     if local:
-        logP, results_dict = tc(
-            openmm_system_dict, 
-            return_results_dict=True, 
-            local=True)
+        logP, results_dict = ray.get(
+            targetcomputer.__call__.remote(
+                openmm_system_dict, 
+                return_results_dict=True, 
+                local=True))
     else:
-        worker_id = tc(
-            openmm_system_dict, 
-            return_results_dict=True, 
-            local=False)
+        worker_id = ray.get(
+            targetcomputer.__call__.remote(
+                openmm_system_dict, 
+                return_results_dict=True, 
+                local=False))
         logP, results_dict = ray.get(worker_id)
 
     if print_output:
@@ -1001,12 +1003,18 @@ def combine_datasets(dataset_path, hessian_path, torsion_path, valid_elements):
 
 
 @ray.remote
-def parameterize_system(_qcentry, _smiles, _forcefield_name, remove_types_manager_list, _partial_charges):
+def parameterize_system(_qcentry, _geometry, _smiles, _forcefield_name, remove_types_manager_list, _partial_charges):
     from . import system
     ### Filter warnings here, because openmm-interchange will generate
     ### lots of bondhandler upconversion warnings.
     import warnings
+    import json
+    import qcelemental as qce
     warnings.filterwarnings('ignore')
+    if isinstance(_qcentry, str):
+        value_dict = json.loads(_qcentry)
+        _qcentry   = qce.models.molecule.Molecule.from_data(value_dict)
+    _qcentry = fix_qcentry(_qcentry, _geometry)
     try:
         system_list = [system.from_qcschema(
             _qcentry, _smiles, _forcefield_name, _partial_charges)]
@@ -1050,18 +1058,26 @@ def fix_qcentry(qcentry, geometry):
 
 
 @ray.remote
-def generate_rdmol_dict(smiles_list, optdataset_dict):
+def generate_rdmol_dict(optdataset_dict):
 
     import warnings
     from openff.toolkit.topology import Molecule
+    import qcelemental as qce
+    import json
     from rdkit import Chem
 
     rdmol_dict = dict()
-    for smiles in smiles_list:
+    for smiles in optdataset_dict:
         found_valid_qcentry = False
         if "qcentry" in optdataset_dict[smiles]:
-            qcentry = fix_entry(
-                    optdataset_dict[smiles]["qcentry"],
+            if isinstance(optdataset_dict[smiles]["qcentry"], str):
+                value_dict = json.loads(
+                    optdataset_dict[smiles]["qcentry"])
+                qcentry    = qce.models.molecule.Molecule.from_data(value_dict)
+            else:
+                qcentry = optdataset_dict[smiles]["qcentry"]
+            qcentry = fix_qcentry(
+                    qcentry,
                     optdataset_dict[smiles]['final_geo'])
             try:
                 offmol = Molecule.from_qcschema(
@@ -1072,8 +1088,14 @@ def generate_rdmol_dict(smiles_list, optdataset_dict):
         else:
             for key in optdataset_dict[smiles]:
                 if "qcentry" in optdataset_dict[smiles][key]:
+                    if isinstance(optdataset_dict[smiles][key]["qcentry"], str):
+                        value_dict = json.loads(
+                            optdataset_dict[smiles][key]["qcentry"])
+                        qcentry    = qce.models.molecule.Molecule.from_data(value_dict)
+                    else:
+                        qcentry = optdataset_dict[smiles][key]["qcentry"]
                     qcentry = fix_qcentry(
-                            optdataset_dict[smiles][key]["qcentry"],
+                            qcentry,
                             optdataset_dict[smiles][key]["final_geo"])
                     try:
                         offmol = Molecule.from_qcschema(
@@ -1122,10 +1144,22 @@ class SystemManagerLoader(object):
         verbose = False,
         ):
 
+        import h5py
+        self._ish5_torsion = False
+        self._ish5_opt     = False
+        if isinstance(optdataset_dict, h5py.File):
+            self._ish5_opt = True
+        if isinstance(torsiondataset_dict, h5py.File):
+            self._ish5_torsion = True
+
         if isinstance(query_smiles_list, type(None)):
             self._query_smiles_list  = list(optdataset_dict.keys())
         else:
             self._query_smiles_list = query_smiles_list
+        if self._ish5_opt:
+            ### This replacement is necessary since
+            ### any `/` in the h5py group keys is replaced with a '__'
+            self._query_smiles_list = [key.replace("__", "/") for key in self._query_smiles_list]
         self._query_smiles_list  = list(set(self._query_smiles_list))
         self.error_scale_geo     = error_scale_geo
         self.error_scale_vib     = error_scale_vib
@@ -1208,26 +1242,37 @@ class SystemManagerLoader(object):
         from rdkit import Chem
 
         CHUNK_SIZE = 1000
-        smi_worker_list = list()
+        optdataset_dict = dict()
         worker_id_list = list()
-        #optdataset_dict_id = ray.put(self.optdataset_dict)
         for smi in self._query_smiles_list:
-            if len(smi_worker_list) < CHUNK_SIZE:
-                smi_worker_list.append(smi)
+            if len(optdataset_dict) < CHUNK_SIZE:
+                if smi not in self.optdataset_dict:
+                    continue
+                for key in self.optdataset_dict[smi]:
+                    check  = "qcentry" in self.optdataset_dict[smi][key]
+                    check *= "final_geo" in self.optdataset_dict[smi][key]
+                    if check:
+                        if self._ish5_opt:
+                            qcentry   = self.optdataset_dict[smi][key]["qcentry"].asstr()[()]
+                            geometry  = self.optdataset_dict[smi][key]["final_geo"][:]
+                        else:
+                            qcentry   = self.optdataset_dict[smi][key]["qcentry"]
+                            geometry  = self.optdataset_dict[smi][key]["final_geo"]
+                        optdataset_dict[smi] = {
+                            "qcentry"   : qcentry,
+                            "final_geo" : geometry,
+                            }
+                        break
             else:
-                #worker_id = generate_rdmol_dict.remote(
-                #        smi_worker_list, optdataset_dict_id)
                 worker_id = generate_rdmol_dict.remote(
-                        smi_worker_list, {_smi:self.optdataset_dict[_smi] for _smi in smi_worker_list})
+                        optdataset_dict)
                 worker_id_list.append(worker_id)
-                smi_worker_list = list()
-        if len(smi_worker_list) > 0:
-            #worker_id = generate_rdmol_dict.remote(
-            #        smi_worker_list, optdataset_dict_id)
+                optdataset_dict.clear()
+        if len(optdataset_dict) > 0:
             worker_id = generate_rdmol_dict.remote(
-                    smi_worker_list, {_smi:self.optdataset_dict[_smi] for _smi in smi_worker_list})
+                    optdataset_dict)
             worker_id_list.append(worker_id)
-            smi_worker_list = list()
+            optdataset_dict.clear()
 
         self.rdmol_dict = dict()
         self.rdmol_to_smiles_map_dict = dict()
@@ -1245,7 +1290,6 @@ class SystemManagerLoader(object):
                 else:
                     self.rdmol_to_smiles_map_dict[smi] = [smiles]
         self.smiles_list = list(self.rdmol_dict.keys())
-        #del optdataset_dict_id
 
 
     def generate_systemmanager(self, smiles_list=None):
@@ -1358,6 +1402,15 @@ def generate_systemmanager(
 
     """
 
+    import h5py
+
+    _ish5_torsion = False
+    _ish5_opt     = False
+    if isinstance(optdataset_dict, h5py.File):
+        _ish5_opt = True
+    if isinstance(torsiondataset_dict, h5py.File):
+        _ish5_torsion = True
+
     if use_torsion and isinstance(torsiondataset_dict, type(None)):
         import warnings
         warnings.warn("Did not provide torsion dataset. Setting `use_torsion=False`")
@@ -1421,40 +1474,66 @@ def generate_systemmanager(
     remove_types_manager_list_id = ray.put(remove_types_manager_list)
     for smiles in smiles_list:
         if use_geo or use_offeq or use_force or use_vib:
-            key = list(
-                optdataset_dict[smiles].keys()
-            )[0]
-            if "qcentry" in optdataset_dict[smiles][key]:
+            check = False
+            if _ish5_opt:
+                _smiles = smiles.replace("/", "__")
+            else:
+                _smiles = smiles
+            for key0 in optdataset_dict[_smiles]:
+                check  = "qcentry" in optdataset_dict[_smiles][key0]
+                check *= "final_geo" in optdataset_dict[_smiles][key0]
+                if check:
+                    break
+            if check:
                 partial_charges = None
-                if 'partial_charges' in optdataset_dict[smiles][key]:
-                    partial_charges = optdataset_dict[smiles][key]['partial_charges']
-                qcentry = fix_qcentry(
-                        optdataset_dict[smiles][key]["qcentry"],
-                        optdataset_dict[smiles][key]["final_geo"])
+                if 'partial_charges' in optdataset_dict[_smiles][key0]:
+                    if _ish5_opt:
+                        partial_charges = optdataset_dict[_smiles][key0]['partial_charges'][:]
+                    else:
+                        partial_charges = optdataset_dict[_smiles][key0]['partial_charges']
+                if _ish5_opt:
+                    qcentry  = optdataset_dict[_smiles][key0]["qcentry"].asstr()[()]
+                    geometry = optdataset_dict[_smiles][key0]["final_geo"][:]
+                else:
+                    qcentry  = optdataset_dict[_smiles][key0]["qcentry"]
+                    geometry = optdataset_dict[_smiles][key0]["final_geo"]
                 worker_id = parameterize_system.remote(
-                        qcentry, smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
+                        qcentry, geometry, smiles, 
+                        forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
         elif use_torsion:
-            for key0 in torsiondataset_dict[smiles]:
+            check = False
+            if _ish5_opt:
+                _smiles = smiles.replace("/", "__")
+            else:
+                _smiles = smiles
+            for key0 in torsiondataset_dict[_smiles]:
                 check = False
-                for key1 in torsiondataset_dict[smiles][key0]:
-                    check  = "qcentry" in torsiondataset_dict[smiles][key0][key1]
-                    check *= "final_geo" in torsiondataset_dict[smiles][key0][key1]
+                for key1 in torsiondataset_dict[_smiles][key0]:
+                    check  = "qcentry" in torsiondataset_dict[_smiles][key0][key1]
+                    check *= "final_geo" in torsiondataset_dict[_smiles][key0][key1]
                     if check:
                         break
                 if check:
                     break
-            if "qcentry" in torsiondataset_dict[smiles][key0][key1]:
+            if check:
                 partial_charges = None
-                if 'partial_charges' in optdataset_dict[smiles][key]:
-                    partial_charges = optdataset_dict[smiles][key]['partial_charges']
-                qcentry = fix_qcentry(
-                        torsiondataset_dict[smiles][key0][key1]["qcentry"],
-                        torsiondataset_dict[smiles][key0][key1]["final_geo"])
+                if 'partial_charges' in optdataset_dict[_smiles][key0]:
+                    if _ish5_opt:
+                        partial_charges = optdataset_dict[_smiles][key0]['partial_charges'][:]
+                    else:
+                        partial_charges = optdataset_dict[_smiles][key0]['partial_charges']
+                if _ish5_torsion:
+                    qcentry  = torsiondataset_dict[_smiles][key0][key1]["qcentry"].asstr()[()]
+                    geometry = torsiondataset_dict[_smiles][key0][key1]["final_geo"][:]
+                else:
+                    qcentry  = torsiondataset_dict[_smiles][key0][key1]["qcentry"]
+                    geometry = torsiondataset_dict[_smiles][key0][key1]["final_geo"]
                 worker_id = parameterize_system.remote(
-                    qcentry, smiles, forcefield_name, remove_types_manager_list_id, partial_charges)
+                    qcentry, geometry, smiles, 
+                    forcefield_name, remove_types_manager_list_id, partial_charges)
                 worker_id_dict[worker_id] = smiles
             else:
                 continue
@@ -1476,7 +1555,8 @@ def generate_systemmanager(
 
         try:
             sys = ray.get(worker_id)
-        except:
+        except Exception as e:
+            print(e)
             continue
         if isinstance(sys, type(None)):
             continue
@@ -1500,24 +1580,34 @@ def generate_systemmanager(
         ene_list       = list()
 
         if use_geo or use_offeq or use_force or use_vib:
-            for conf_i in optdataset_dict[smiles]:
+            if _ish5_opt:
+                _smiles = smiles.replace("/", "__")
+            else:
+                _smiles = smiles
+
+            for conf_i in optdataset_dict[_smiles]:
 
                 if use_geo or use_vib:
-                    if "final_geo" in optdataset_dict[smiles][conf_i]:
-                        final_geo_list.extend([optdataset_dict[smiles][conf_i]["final_geo"]])
+                    if "final_geo" in optdataset_dict[_smiles][conf_i]:
+                        final_geo_list.extend(
+                            [optdataset_dict[_smiles][conf_i]["final_geo"][:]])
 
                 if use_offeq or use_force:
-                    if "geo_list" in optdataset_dict[smiles][conf_i]:
-                        if "ene_list" in optdataset_dict[smiles][conf_i]:
+                    if "geo_list" in optdataset_dict[_smiles][conf_i]:
+                        if "ene_list" in optdataset_dict[_smiles][conf_i]:
                             if use_force:
-                                force_list.extend(optdataset_dict[smiles][conf_i]["force_list"])
-                            off_geo_list.extend(optdataset_dict[smiles][conf_i]["geo_list"])
-                            ene_list.extend(optdataset_dict[smiles][conf_i]["ene_list"])
+                                force_list.extend(
+                                    optdataset_dict[_smiles][conf_i]["force_list"][:])
+                            off_geo_list.extend(
+                                optdataset_dict[_smiles][conf_i]["geo_list"][:])
+                            ene_list.extend(
+                                optdataset_dict[_smiles][conf_i]["ene_list"][:])
 
                 if use_vib:
-                    if "hessian" in optdataset_dict[smiles][conf_i]:
-                        if "final_geo" in optdataset_dict[smiles][conf_i]:
-                            hessian_list.extend([optdataset_dict[smiles][conf_i]["hessian"]])
+                    if "hessian" in optdataset_dict[_smiles][conf_i]:
+                        if "final_geo" in optdataset_dict[_smiles][conf_i]:
+                            hessian_list.extend(
+                                [optdataset_dict[_smiles][conf_i]["hessian"]][:])
 
                 ### This adds graph information computed from QTAIM data to the
                 ### systems. Currently we don't want to support this.
@@ -1526,22 +1616,24 @@ def generate_systemmanager(
                 #sys.add_nxmol(qgraph)
 
         if use_torsion:
-            if smiles in torsiondataset_dict:
-                weight = len(torsiondataset_dict[smiles])
-                for conf_i in torsiondataset_dict[smiles]:
+            if _ish5_torsion:
+                _smiles = smiles.replace("/", "__")
+            else:
+                _smiles = smiles
+            if _smiles in torsiondataset_dict:
+                weight = len(torsiondataset_dict[_smiles])
+                for conf_i in torsiondataset_dict[_smiles]:
                     torsion_geo_list = list()
                     torsion_ene_list = list()
-                    for dih_i in torsiondataset_dict[smiles][conf_i]:
-                        if not isinstance(torsiondataset_dict[smiles][conf_i][dih_i], dict):
+                    for dih_i in torsiondataset_dict[_smiles][conf_i]:
+                        if not isinstance(torsiondataset_dict[_smiles][conf_i][dih_i], dict):
                             continue
-                        if "final_geo" in torsiondataset_dict[smiles][conf_i][dih_i]:
-                            if "final_ene" in torsiondataset_dict[smiles][conf_i][dih_i]:
+                        if "final_geo" in torsiondataset_dict[_smiles][conf_i][dih_i]:
+                            if "final_ene" in torsiondataset_dict[_smiles][conf_i][dih_i]:
                                 torsion_geo_list.extend(
-                                    torsiondataset_dict[smiles][conf_i][dih_i]["final_geo"]
-                                    )
+                                    torsiondataset_dict[_smiles][conf_i][dih_i]["final_geo"][:])
                                 torsion_ene_list.extend(
-                                    torsiondataset_dict[smiles][conf_i][dih_i]["final_ene"]
-                                        )
+                                    torsiondataset_dict[_smiles][conf_i][dih_i]["final_ene"][:])
 
                     target_dict_torsion = { "structures"          : [TO_LENGTH_UNIT(_g) for _g in torsion_geo_list],
                                             "energies"            : [TO_ENE_UNIT(_e) for _e in torsion_ene_list],
@@ -1558,12 +1650,12 @@ def generate_systemmanager(
 
         if use_geo:
             if len(final_geo_list) > 0:
-                target_dict_geo = { "structures"   : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
-                                    "rdmol"        : sys_target.rdmol,
-                                    "minimize"     : True,
-                                    "H_constraint" : False,
-                                    "denom_bond"   : 5.0e-3 * _LENGTH * error_scale_geo,
-                                    "denom_angle"  : 8.0e-0 * _ANGLE * error_scale_geo,
+                target_dict_geo = { "structures"    : [TO_LENGTH_UNIT(_g) for _g in final_geo_list],
+                                    "rdmol"         : sys_target.rdmol,
+                                    "minimize"      : True,
+                                    "H_constraint"  : False,
+                                    "denom_bond"    : 5.0e-3 * _LENGTH * error_scale_geo,
+                                    "denom_angle"   : 8.0e-0 * _ANGLE * error_scale_geo,
                                     "denom_torsion" : 2.0e+1 * _ANGLE * error_scale_geo,
                                   }
                 if target_dict_geo["structures"]:
