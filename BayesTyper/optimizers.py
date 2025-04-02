@@ -1844,6 +1844,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         del state["targetcomputer_id_dict"]
         del state["obs"]
         del state["system_manager_loader"]
+        del state["_ray_cleanup"]
 
         state["parm_mngr_cache_dict"] = dict()
         state["bsm_cache_dict"] = dict()
@@ -1859,6 +1860,7 @@ class ForceFieldOptimizer(BaseOptimizer):
         self.system_list = list()
         self.system_name_list = list()
         self.targetcomputer_id_dict = dict()
+        self._ray_cleanup = list()
         self.obs = None
         self.system_manager_loader = None
 
@@ -2374,6 +2376,8 @@ class ForceFieldOptimizer(BaseOptimizer):
             self.bitvec_dict = dict()
             self.split_iteration_idx = 0
             self.accepted_counter = 0
+            self._ray_cleanup = list()
+            self.targetcomputer_id_dict.clear()
 
         if self.verbose and restart:
             print("Attempting to restart from previous run.")
