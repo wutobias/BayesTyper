@@ -59,3 +59,8 @@ _GLOBAL_TOP_METHOD = "differential_evolution"
 ### Fraction of bits to be on for a bitvector
 ### to be considered during type splitting
 _MAX_ON            = 0.05
+
+### Bounds used for fitting
+### They are based off various force fields
+_BOND_BOUNDS_LIST  = "openff_unconstrained-2.2.1"
+_ANGLE_BOUNDS_LIST = "openff_unconstrained-2.2.1"

@@ -176,15 +176,15 @@ class MultiTorsionBounds(BaseBounds):
             ["[*]~[*]~[*]~[*]" , [0. for _ in range(max_periodicity)]],
             ]
         smirks = ["[*]~[*]~[*]~[*]"]
-        lower  = [[-5. for _ in range(max_periodicity)]]
-        upper  = [[+5. for _ in range(max_periodicity)]]
+        lower  = [[-8. for _ in range(max_periodicity)]]
+        upper  = [[+8. for _ in range(max_periodicity)]]
 
         super().__init__(upper, lower, smirks)
 
     def get_bounds(self, pvec):
 
-        _LOWER = -5.
-        _UPPER =  5.
+        _LOWER = -8.
+        _UPPER =  8.
 
         lower_list = list()
         upper_list = list()
