@@ -537,13 +537,13 @@ def minimize_FF(
             for _lu in zip(lower_trans, upper_trans):
                 _lu = list(_lu)
                 if abs(_lu[0]-_lu[1]) < 1.e-2:
-                    _lu[0] -= 2
-                    _lu[1] += 2
+                    _lu[0] -= 4
+                    _lu[1] += 4
                 search_space_list.append(_lu)
         else:
             N = pvec.force_group_count * pvec.parameters_per_force_group
             for _ in range(N):
-                search_space_list.append([-2,2])
+                search_space_list.append([-4,4])
     search_space_list = np.array(search_space_list)
 
     if verbose:
@@ -843,9 +843,11 @@ def validate_FF(
                 bitvec_type_list_list_initial[mngr_idx])
 
     if verbose:
-        print(
-               f"{allocation_failure_counts} of {allocation_all_counts} allocation attempts failed.")
-        print(
+        if allocation_failure_counts:
+            print(
+                f"{allocation_failure_counts} of {allocation_all_counts} allocation attempts failed.")
+        if minimization_failure_counts:
+            print(
                f"{minimization_failure_counts} of {minimization_all_counts} minimization attempts failed.")
 
     del pvec_list_cp
@@ -1055,7 +1057,8 @@ class BaseOptimizer(object):
         if isinstance(parameter_manager, parameters.BondManager):
             bvc = bitvector_typing.BondBitvectorContainer
             frozen_type_definitions = [
-                ["[*:1]~[*:2]", [None, None]]
+                ["[*:1]~[*:2]",  [None, None]],
+                ["[*:1]-[#1:2]", [None, None]]
                 ]
         elif isinstance(parameter_manager, parameters.AngleManager):
             bvc = bitvector_typing.AngleBitvectorContainer
@@ -1959,9 +1962,9 @@ class ForceFieldOptimizer(BaseOptimizer):
                 N_types          = pvec.force_group_count
                 if N_types > 1:
                     for type_i in range(N_types):
+                        type_i = N_types - type_i - 1
                         if bitvec_type_list[type_i] in self.frozen_types_list[mngr_idx]:
                             continue
-                        type_i = N_types - type_i - 1
                         best_mngr_type_dict[mngr_idx, type_i] = 0
                         b = bitvec_type_list.pop(type_i)
                         allocations = [-1 for _ in pvec.allocations]
