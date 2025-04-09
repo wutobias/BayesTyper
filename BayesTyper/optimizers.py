@@ -755,9 +755,9 @@ def validate_FF(
 
         allocation_all_counts += 1
 
-        args = worker_id_dict[worker_id[0]]
-        ast, _, _, _, _, _, _, _, _, _, _ = args
-        _, _, (type_i, type_j) = ast
+        ast = worker_id_dict[worker_id[0]]
+        _, _, type_ = ast
+        type_i, type_j = type_
 
         allocation_failure = False
         for mngr_idx in range(N_mngr):
@@ -1684,7 +1684,7 @@ class BaseOptimizer(object):
         else:
             type_query_list = [N_types-1]
 
-        worker_id_dict = dict()
+        worker_id_list = list()
         alloc_bitvec_degeneracy_dict = dict()
         for type_i in type_query_list:
             type_j = type_i + 1
@@ -1813,10 +1813,9 @@ class BaseOptimizer(object):
                     local_targets = False,
                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                     )
-                args = (pvec_id, self.targetcomputer_id_dict[system_idx_list], type_i, selection_i, k_values_ij[split_idxs], self.grad_diff, N_trials_gradient, self._N_sys_per_likelihood_batch, mngr_idx, system_idx_list)
-                worker_id_dict[worker_id] = args
+                worker_id_list.append(worker_id)
 
-        return worker_id_dict, alloc_bitvec_degeneracy_dict
+        return worker_id_list, alloc_bitvec_degeneracy_dict
     
 
 class ForceFieldOptimizer(BaseOptimizer):
@@ -2078,7 +2077,7 @@ class ForceFieldOptimizer(BaseOptimizer):
 
     def get_votes(
         self,
-        worker_id_dict,
+        worker_id_list,
         low_to_high=True,
         abs_grad_score=False,
         norm_cutoff=0.,
@@ -2088,13 +2087,11 @@ class ForceFieldOptimizer(BaseOptimizer):
 
         import numpy as np
 
-        if len(worker_id_dict) == 0:
+        if len(worker_id_list) == 0:
             return list()
 
         votes_dict = dict()
         alloc_bitvec_dict = dict()
-
-        worker_id_list = list(worker_id_dict.keys())
 
         score_dict  = dict()
         norm_dict   = dict()
@@ -2141,8 +2138,6 @@ class ForceFieldOptimizer(BaseOptimizer):
                             score_dict[ast]  = g
                             counts_dict[ast] = 1
                             norm_dict[ast]   = [abs(n[0]), abs(n[1])]
-
-                del worker_id_dict[worker_id[0]]
 
         to_delete = list()
         for ast in score_dict:
@@ -2205,21 +2200,21 @@ class ForceFieldOptimizer(BaseOptimizer):
         ### ======================
         for counts, ast in enumerate(votes_split_list):
             allocations, selection, type_ = ast
+            type_i, type_j = type_
             bitvec_type_list_cp = copy.deepcopy(bitvec_type_list)
-            bitvec_type_list_cp[mngr_idx_main].insert(type_[1], bitvec_dict[ast][0])
+            bitvec_type_list_cp[mngr_idx_main].insert(type_j, bitvec_dict[ast][0])
             bitvec_type_list_id = ray.put(bitvec_type_list_cp)
 
-            pvec_all[mngr_idx_main].duplicate(type_[0], type_[1])
+            pvec_all[mngr_idx_main].duplicate(type_i, type_j)
             pvec_all[mngr_idx_main].allocations[:] = allocations[:]
             pvec_all[mngr_idx_main].apply_changes()
 
             pvec_all_cp = [pvec.copy() for pvec in pvec_all]
-            pvec_all_id = ray.put(pvec_all_cp)
 
             worker_id = minimize_FF.remote(
                     system_list = system_list_id,
                     targetcomputer = self.targetcomputer_id_dict[system_idx_list],
-                    pvec_list = pvec_all_id,
+                    pvec_list = pvec_all_cp,
                     frozen_types_list = self.frozen_types_list,
                     bitvec_type_list = bitvec_type_list_id,
                     bounds_list = self.bounds_list,
@@ -2232,21 +2227,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     verbose = self.verbose,
                     )
 
-            worker_id_dict[worker_id] = (
-                ast, 
-                system_list_id, 
-                self.targetcomputer_id_dict[system_idx_list], 
-                pvec_all_id, 
-                bitvec_type_list_id, 
-                self.bounds_list,
-                self.parm_penalty_split, 
-                #mngr_idx_main, 
-                None,
-                #self._bounds_penalty_list_work,
-                [1. for _ in range(self.N_mngr)],
-                self._N_sys_per_likelihood_batch,
-                system_idx_list
-                )
+            worker_id_dict[worker_id] = ast
 
             pvec_all[mngr_idx_main].reset(
                 pvec_cp, allocations_cp)
@@ -2529,7 +2510,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                     for key in split_worker_id_dict:
                         mngr_idx, sys_idx_pair = key
                         votes_split_list = self.get_votes(
-                            worker_id_dict = split_worker_id_dict[mngr_idx,sys_idx_pair][0],
+                            worker_id_list = split_worker_id_dict[mngr_idx,sys_idx_pair][0],
                             low_to_high = True,
                             abs_grad_score = False,
                             norm_cutoff = 1.e-2,
@@ -2603,25 +2584,33 @@ class ForceFieldOptimizer(BaseOptimizer):
                     ### If we want to restart, first make sure that we re-run all
                     ### the left-over minimization runs
                     for mngr_idx, sys_idx_pair in self.minscore_worker_id_dict:
-                        pvec_list, bitvec_type_list = self.generate_parameter_vectors(
+                        pvec_all, bitvec_type_list = self.generate_parameter_vectors(
                             system_idx_list=sys_idx_pair)
-                        pvec_all_id = ray.put(pvec_list)
+                        pvec_cp = pvec_all[mngr_idx].vector_k[:].copy()
+                        allocations_cp = copy.deepcopy(pvec_all[mngr_idx].allocations)
                         system_list_id = ray.put(
-                            self.system_list[sys_idx])
+                            [self.system_list[sys_idx] for sys_idx in sys_idx_pair])
 
                         _minscore_worker_id_dict[mngr_idx, sys_idx_pair] = dict()
                         for ast in self.bitvec_dict[mngr_idx,sys_idx_pair]:
-                            _, _, type_ = ast
+                            allocations, selection, type_ = ast
+                            type_i, type_j = type_
                             bitvec_type_list_cp = copy.deepcopy(bitvec_type_list)
-                            bitvec_type_list_cp.insert(type_[1], self.bitvec_dict[mngr_idx,sys_idx_pair][ast][0])
-                            bitvec_type_list_id = ray.put(bitvec_type_list_cp)
+                            bitvec_type_list_cp[mngr_idx].insert(
+                                    type_j, self.bitvec_dict[mngr_idx,sys_idx_pair][ast][0])
+
+                            pvec_all[mngr_idx].duplicate(type_i, type_j)
+                            pvec_all[mngr_idx].allocations[:] = allocations[:]
+                            pvec_all[mngr_idx].apply_changes()
+
+                            pvec_all_cp = [pvec.copy() for pvec in pvec_all]
 
                             worker_id = minimize_FF.remote(
                                     system_list = system_list_id,
                                     targetcomputer = self.targetcomputer_id_dict[sys_idx_pair],
-                                    pvec_list = pvec_all_id,
+                                    pvec_list = pvec_all_cp,
                                     frozen_types_list = self.frozen_types_list,
-                                    bitvec_type_list = bitvec_type_list_id,
+                                    bitvec_type_list = bitvec_type_list_cp,
                                     bounds_list = self.bounds_list,
                                     parm_penalty = self.parm_penalty_split,
                                     local_targets = False,
@@ -2630,11 +2619,11 @@ class ForceFieldOptimizer(BaseOptimizer):
                                     N_sys_per_likelihood_batch = self._N_sys_per_likelihood_batch,
                                     use_global_opt = _USE_GLOBAL_OPT,
                                     verbose = self.verbose)
-                            args = ast, system_list_id, self.targetcomputer_id_dict[sys_idx_pair], pvec_all_id, \
-                                   bitvec_type_list_id, self.bounds_list, self.parm_penalty_split, \
-                                   mngr_idx, self._bounds_penalty_list_work[mngr_idx], self._N_sys_per_likelihood_batch, \
-                                   sys_idx_pair
-                            _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = args
+                            _minscore_worker_id_dict[mngr_idx, sys_idx_pair][worker_id] = ast
+
+                            pvec_all[mngr_idx].reset(
+                                    pvec_cp, allocations_cp)
+
                     self.minscore_worker_id_dict = _minscore_worker_id_dict
                     self._set_system_list(
                         self._validation_generator_smiles_list)
