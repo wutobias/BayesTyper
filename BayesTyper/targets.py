@@ -955,7 +955,7 @@ def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
     return target_worker_local(openmm_system_dict, target_dict, return_results_dict=return_results_dict)
 
 
-@ray.remote(num_cpus=0.5)
+@ray.remote
 class TargetComputer(object):
 
     def __init__(
