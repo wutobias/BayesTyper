@@ -476,26 +476,41 @@ def from_offmol(offmol,
     offmol = copy.deepcopy(offmol)
     top    = offmol.to_topology()
 
-    if FF_name.startswith("gaff"):
-        from openmmforcefields.generators import GAFFTemplateGenerator
-        from simtk.openmm.app import ForceField
+    from openff.toolkit.typing.engines import smirnoff
+    from openmm import app
 
-        gaff = GAFFTemplateGenerator(
-            molecules=offmol, 
-            forcefield=FF_name
-            )
-        ff  = ForceField()
-        ff.registerTemplateGenerator(gaff.generator)
-        openmm_system = ff.createSystem(
+    if isinstance(FF_name, app.ForceField):
+        openmm_system = FF_name.createSystem(
             topology = top.to_openmm()
             )
-    else:
+    elif isinstance(FF_name, smirnoff.ForceField):
         charges_list = None
         if use_charges:
             charges_list = [offmol]
-        from openff.toolkit.typing.engines.smirnoff import ForceField
-        ff     = ForceField(FF_name)
+        ff     = FF_name
         openmm_system = ff.create_openmm_system(
                 top, charge_from_molecules=charges_list)
+    elif isinstance(FF_name, str):
+        if FF_name.startswith("gaff"):
+            from openmmforcefields.generators import GAFFTemplateGenerator
+
+            gaff = GAFFTemplateGenerator(
+                molecules=offmol, 
+                forcefield=FF_name
+                )
+            ff  = app.ForceField()
+            ff.registerTemplateGenerator(gaff.generator)
+            openmm_system = ff.createSystem(
+                topology = top.to_openmm()
+                )
+        else:
+            charges_list = None
+            if use_charges:
+                charges_list = [offmol]
+            ff     = smirnoff.ForceField(FF_name)
+            openmm_system = ff.create_openmm_system(
+                    top, charge_from_molecules=charges_list)
+    else:
+        raise ValueError(f"Type {type(FF_name)} not understood.")
 
     return System(name, offmol, openmm_system, top)

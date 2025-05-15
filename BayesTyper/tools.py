@@ -1707,7 +1707,7 @@ def generate_systemmanager(
                                     "ene_weighting": ene_weighting,
                                     "denom_bond"   : 5.0e-0 * _FORCE * error_scale_force,
                                     "denom_angle"  : 5.0e-1 * _FORCE * error_scale_force,
-                                    "denom_force"  : 2.0e+4 * _FORCE * error_scale_force,
+                                    "denom_force"  : 2.0e+3 * _FORCE * error_scale_force,
                                 }
                 if target_dict_frc["structures"]:
                     if force_projection:

@@ -1096,7 +1096,6 @@ class BaseOptimizer(object):
             raise ValueError(
                 f"Parameter manager of type {type(parameter_manager)} not known.")
 
-        
         self.frozen_types_list.append(dict())
         for parm_idx, frozen_parms in enumerate(frozen_type_definitions):
             sma, parms = frozen_parms
