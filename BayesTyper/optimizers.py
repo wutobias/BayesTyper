@@ -22,7 +22,8 @@ from .constants import (_LENGTH,
                         _EPSILON,
                         _EPSILON_GS,
                         _USE_GLOBAL_OPT,
-                        _GLOBAL_TOP_METHOD,
+                        _GLOBAL_OPT_METHOD,
+                        _OPT_TIMEOUT,
                         _MAX_ON
                         )
 from .ray_tools import retrieve_failed_workers
@@ -352,7 +353,7 @@ def get_gradient_scores(
     return grad_score_dict, grad_norm_dict, allocation_list_dict, selection_list_dict, type_list_dict
 
 
-@ray.remote(num_cpus=1)
+@ray.remote(num_cpus=1, max_retries=0)
 def minimize_FF(
     system_list,
     targetcomputer,
@@ -367,18 +368,16 @@ def minimize_FF(
     bounds_penalty = 10.,
     use_global_opt = _USE_GLOBAL_OPT,
     verbose = False,
+    TIMEOUT = _OPT_TIMEOUT, #timeout for optimizier in seconds, default is 1hr
     get_timing = False):
 
     verbose = False
-
-    if get_timing:
-        import time
-        time_start = time.time()
 
     from openmm import unit
     from . import priors
     import numpy as np
     import copy
+    import time
 
     pvec_list_cp   = copy.deepcopy(pvec_list)
     system_list_cp = copy.deepcopy(system_list)
@@ -493,6 +492,8 @@ def minimize_FF(
 
     bounds_penalty_list  = np.array(bounds_penalty_list, dtype=float)
 
+    time_start = time.time()
+
     def penalty(x):
 
         penalty_val = 0.
@@ -535,6 +536,13 @@ def minimize_FF(
         _grad *= -2.
 
         return _grad[parm_idx_list]
+
+    def stop_after_timeout(xk, convergence):
+        elapsed = time.time() - time_start
+        if elapsed > TIMEOUT:
+            print(f"Stopping Optimization after {elapsed:.2f} seconds")
+            return True
+        return False
 
     likelihood_func = LikelihoodVectorized(
         pvec_min_list,
@@ -605,7 +613,7 @@ def minimize_FF(
         likelihood_func._initialize_systems()
 
         from .constants import _OPT_METHOD
-        METHOD = _GLOBAL_TOP_METHOD
+        METHOD = _GLOBAL_OPT_METHOD
         if use_global_opt:
             _fun  = lambda x: fun(x)
             _grad = lambda x: grad(x)
@@ -625,6 +633,7 @@ def minimize_FF(
                 result = optimize.differential_evolution(
                    _fun, search_space_list[parm_idx_list].tolist(),
                    polish = False, x0 = x0[parm_idx_list],
+                   callback = stop_after_timeout,
                    maxiter = 1000,)
             elif METHOD == "basinhopping":
                 result = optimize.basinhopping(
@@ -2503,7 +2512,7 @@ class ForceFieldOptimizer(BaseOptimizer):
                         print(
                             "Optimized ordering of systems:", self.system_idx_list_batch)
                         print(
-                            f"N_sys_per_batch_split: {N_sys_per_batch_split} // local_targets {use_local_targets}")
+                            f"N_sys_per_likelihood_batch: {N_sys_per_likelihood_batch} // local_targets {use_local_targets}")
 
                 if not restart:
                     if self.verbose:
@@ -2767,17 +2776,25 @@ class ForceFieldOptimizer(BaseOptimizer):
                             self.best_pvec_dict[key] = [pvec[:].copy() for pvec in pvec_list], best_bitvec_type_list
 
                     del self.selection_worker_id_dict[mngr_idx, sys_idx_pair][worker_id]
+                    to_delete = list()
+                    for worker_id in self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]:
+                        ast = self.minscore_worker_id_dict[mngr_idx,sys_idx_pair][worker_id]
+                        if new_ast == ast:
+                            to_delete.append(worker_id)
+                    for worker_id in to_delete:
+                        del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair][worker_id]
 
                     if len(self.selection_worker_id_dict[mngr_idx, sys_idx_pair]) == 0:
                         del self.minscore_worker_id_dict[mngr_idx,sys_idx_pair]
                         del self.bitvec_dict[mngr_idx,sys_idx_pair]
                         del self.selection_worker_id_dict[mngr_idx,sys_idx_pair]
 
-                        with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
-                            pickle.dump(
-                                    self,
-                                    fopen)
                         self.accepted_counter += 1
+
+                    with open(f"{self.name}-MAIN-{iteration_idx+output_offset}-SPLIT-{self.split_iteration_idx}-ACCEPTED-{self.accepted_counter}.pickle", "wb") as fopen:
+                        pickle.dump(
+                                self,
+                                fopen)
 
                 del worker_id_dict
 
