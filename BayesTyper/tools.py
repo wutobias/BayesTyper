@@ -51,6 +51,91 @@ get_atomic_weight = Chem.GetPeriodicTable().GetAtomicWeight
 get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 
+def build_forcefield(ff_hopper, forcefield):
+
+    from openff.toolkit.typing.engines import smirnoff
+    from BayesTyper import parameters
+    
+    pvec_list, _ = ff_hopper.generate_parameter_vectors(
+        system_idx_list=[0])
+    for i in range(ff_hopper.N_mngr):
+        pvec   = pvec_list[i]
+        mngr   = pvec_list[i].parameter_manager
+        b_list = ff_hopper.best_bitvec_type_list[i]
+        bsm, _ = ff_hopper.generate_bitsmartsmanager(
+            mngr_idx=i, system_idx_list=[0])
+        if isinstance(mngr, parameters.BondManager):
+            forcefield.get_parameter_handler("Bonds")
+            forcefield.deregister_parameter_handler("Bonds")
+            handler = smirnoff.BondHandler(skip_version_check=True)
+            for j, b in enumerate(b_list):
+                pvec.allocations[0] = j
+                pvec.apply_changes()
+                sma = bsm.bitvector_to_smarts(b)
+                fc  = mngr.forcecontainer_list[j]
+                handler.add_parameter(
+                    {
+                        "k"      : fc.k.in_units_of(unit.kilocalorie_per_mole/unit.angstrom**2),
+                        "length" : fc.length.in_units_of(unit.angstrom),
+                        "smirks" : sma,
+                        "id"     : f"b{j+1:d}",
+                    }
+                )
+            forcefield.register_parameter_handler(handler)
+        elif isinstance(mngr, parameters.AngleManager):
+            forcefield.get_parameter_handler("Angles")
+            forcefield.deregister_parameter_handler("Angles")
+            handler = smirnoff.AngleHandler(skip_version_check=True)
+            for j, b in enumerate(b_list):
+                pvec.allocations[0] = j
+                pvec.apply_changes()
+                sma = bsm.bitvector_to_smarts(b)
+                fc  = mngr.forcecontainer_list[j]
+                handler.add_parameter(
+                    {
+                        "k"      : fc.k.in_units_of(unit.kilocalorie_per_mole/unit.radian**2),
+                        "angle" :  fc.angle.in_units_of(unit.degree),
+                        "smirks" : sma,
+                        "id"     : f"a{j+1:d}",
+                    }
+                )
+            forcefield.register_parameter_handler(handler)
+        elif isinstance(mngr, parameters.MultiProperTorsionManager):
+            forcefield.get_parameter_handler("ProperTorsions")
+            forcefield.deregister_parameter_handler("ProperTorsions")
+            handler = smirnoff.ProperTorsionHandler(skip_version_check=True)
+            for j, b in enumerate(b_list):
+                pvec.allocations[0] = j
+                pvec.apply_changes()
+                sma = bsm.bitvector_to_smarts(b)
+                fc  = mngr.forcecontainer_list[j]
+                parm_dict = {
+                    "smirks" : sma,
+                    "id"     : f"t{j+1:d}",
+                }
+                
+                for name in fc.parm_names:
+                    if name.startswith("k"):
+                        v = fc.get_parameter(name).in_units_of(unit.kilocalorie_per_mole)
+                        i = int(name.replace("k", ""))
+                        name = f"k{i+1:d}"
+                    elif name.startswith("periodicity"):
+                        v = int(fc.get_parameter(name))
+                        i = int(name.replace("periodicity", ""))
+                        name = f"periodicity{i+1:d}"
+                    elif name.startswith("phase"):
+                        v = fc.get_parameter(name).in_units_of(unit.degree)
+                        i = int(name.replace("phase", ""))
+                        name = f"phase{i+1:d}"
+                    parm_dict[name] = v
+                    parm_dict[f"idivf{i+1:d}"] = 1.
+    
+                handler.add_parameter(parm_dict)
+            forcefield.register_parameter_handler(handler)
+
+    return forcefield
+
+
 def benchmark_systems(
     system_list, KEY_LIST = ["rmse"], 
     print_output=True, only_global=False,
