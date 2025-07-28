@@ -51,6 +51,25 @@ get_atomic_weight = Chem.GetPeriodicTable().GetAtomicWeight
 get_atomic_number = Chem.GetPeriodicTable().GetAtomicNumber
 
 
+from collections import abc
+from openmm import unit
+import copy
+
+def transform_unit(value):
+
+    """
+    Recursively remove all units from a dictionary.
+    """
+    if isinstance(value, abc.Iterable) and not unit.is_quantity(value):
+        for key in value:
+            value[key] = transform_unit(value[key])
+        return value
+    elif unit.is_quantity(value):
+        return value._value
+    else:
+        return value
+
+
 def build_forcefield(ff_hopper, forcefield):
 
     from openff.toolkit.typing.engines import smirnoff

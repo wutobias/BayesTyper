@@ -891,10 +891,11 @@ def run_forceprojectionmatchingtarget(
         return rss, log_norm_factor
 
 
-def target_worker_local(openmm_system_dict, target_dict, return_results_dict=True):
+def target_worker_local(openmm_system_dict, target_dict, return_results_dict=True, strip_units=True):
 
     import ray
     import numpy as np
+    from .tools import transform_unit
 
     target_method_dict = {
         "GeoTarget"                     : run_geotarget,
@@ -947,12 +948,16 @@ def target_worker_local(openmm_system_dict, target_dict, return_results_dict=Tru
         if return_results_dict:
             results_all_dict[key] = results_dict
 
+    if strip_units:
+        results_all_dict = transform_unit(results_all_dict)
+
     return logP_likelihood, results_all_dict
 
 
 @ray.remote
-def target_worker(openmm_system_dict, target_dict, return_results_dict=True):
-    return target_worker_local(openmm_system_dict, target_dict, return_results_dict=return_results_dict)
+def target_worker(openmm_system_dict, target_dict, return_results_dict=True, strip_units=True):
+    return target_worker_local(
+            openmm_system_dict, target_dict, return_results_dict, strip_units)
 
 
 @ray.remote
@@ -1014,19 +1019,22 @@ class TargetComputer(object):
         self, 
         openmm_system_dict,
         return_results_dict=True,
-        local=False):
+        local=False,
+        strip_units=True):
 
         if local:
             result = target_worker_local(
                 openmm_system_dict, 
                 {sys_name : self.target_dict[sys_name] for sys_name, sys_key in openmm_system_dict},
-                return_results_dict)
+                return_results_dict,
+                strip_units)
             return result
         else:
             worker_id = target_worker.remote(
                 openmm_system_dict, 
                 {sys_name : self.target_dict[sys_name] for sys_name, sys_key in openmm_system_dict},
-                return_results_dict)
+                return_results_dict,
+                strip_units)
             return worker_id
 
 
