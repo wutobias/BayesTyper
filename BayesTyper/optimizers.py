@@ -2210,10 +2210,10 @@ class ForceFieldOptimizer(BaseOptimizer):
             del score_dict[ast]
         
         ### Sort dictionaries
-        ### For merge: high values favored, i.e. high values first
+        ### For split: small values favored, i.e. small values first
         score_list = [k for k, v in sorted(score_dict.items(), key=lambda item: item[1], reverse=False)]
+        ### For merge: high values favored, i.e. high values first
         if not low_to_high:
-            ### For split: small values favored, i.e. small values first
             score_list = score_list[::-1]
 
         ### Only keep the final best `keep_N_best` ast
