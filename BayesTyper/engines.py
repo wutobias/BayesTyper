@@ -314,13 +314,12 @@ class OpenmmEngine(object):
                     )
             self.update_state()
             ene_min_old = self.pot_ene
-            crit *= _MIN_TOLERACE.unit
             for _ in range(1000):
                 self.openmm_simulation.minimizeEnergy(
-                    tolerance=crit, 
+                    tolerance=crit * _MIN_TOLERACE.unit, 
                     maxIterations=10)
                 self.update_state()
-                diff = self.pot_ene - ene_min_old
+                diff = (self.pot_ene - ene_min_old).value_in_unit(_ENERGY_PER_MOL)
                 if abs(diff) < crit:
                     break
                 ene_min_old = self.pot_ene
